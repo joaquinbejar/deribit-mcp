@@ -1,0 +1,21 @@
+[package]
+name = "deribit-mcp"
+version = "0.1.0"
+edition = "2024"
+authors = ["Joaquin Bejar <jb@taunais.com>"]
+description = "MCP (Model Context Protocol) server for Deribit trading platform"
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/joaquinbejar/deribit-mcp"
+homepage = "https://github.com/joaquinbejar/deribit-mcp"
+keywords = ["finance", "deribit", "trading", "mcp", "api"]
+categories = ["finance", "api-bindings"]
+
+include = [
+    "src/**/*",
+    "Cargo.toml",
+    "README.md",
+    "LICENSE",
+]
+
+[dependencies]
