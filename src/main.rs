@@ -1,29 +1,68 @@
 //! Binary entry point for `deribit-mcp`.
 //!
-//! Parses CLI arguments, selects the transport (stdio or HTTP/SSE), and
-//! hands off to the `rmcp` runtime. The full wiring lands incrementally
-//! across v0.1-02 (config), v0.1-03 (observability), v0.1-05 (`rmcp`
-//! scaffold), v0.1-08 (stdio), v0.1-09 (HTTP/SSE), and v0.1-13
-//! (graceful shutdown).
+//! Parses CLI arguments, selects the transport (stdio in v0.1-08;
+//! HTTP/SSE in v0.1-09), and hands off to the `rmcp` runtime. Treats
+//! stdin EOF (or `rmcp`'s reported `QuitReason::Closed`) as a clean
+//! shutdown signal.
 //!
-//! `anyhow` is acceptable here — it is the only place in the crate that
-//! is allowed to bubble up startup failures to a printed exit message
-//! (`rules/global_rules.md` — Error Handling).
+//! `anyhow` is acceptable here — `main.rs` is the only place in the
+//! crate that is allowed to bubble up startup failures to a printed
+//! exit message; everywhere else uses `AdapterError`.
 
 #![forbid(unsafe_code)]
+#![allow(clippy::print_stdout, clippy::print_stderr)]
 
-use anyhow::Result;
-use deribit_mcp::config::Config;
+use std::sync::Arc;
 
-fn main() -> Result<()> {
-    let config = Config::load()?;
+use anyhow::{Context, Result};
+use rmcp::ServiceExt;
+use rmcp::transport::io::stdio;
 
-    deribit_mcp::observability::init(&config);
+use deribit_mcp::config::{Config, Transport};
+use deribit_mcp::context::AdapterContext;
+use deribit_mcp::observability;
+use deribit_mcp::server::DeribitMcpServer;
 
-    // The async runtime + transport selection wiring lands in v0.1-08 /
-    // v0.1-09. v0.1-02 loads the config; v0.1-03 sets up observability;
-    // subsequent issues wire up the runtime and transports.
-    tracing::info!("deribit-mcp starting; transport wiring lands in v0.1-08/v0.1-09");
+#[tokio::main]
+async fn main() -> Result<()> {
+    let config = Config::load().context("loading configuration")?;
+
+    observability::init(&config);
+
+    let endpoint = config.endpoint.clone();
+    let env_label = if endpoint.contains("test.deribit.com") {
+        "TESTNET"
+    } else {
+        "MAINNET"
+    };
+
+    let ctx = Arc::new(
+        AdapterContext::new(Arc::new(config.clone())).context("building adapter context")?,
+    );
+
+    let server = DeribitMcpServer::new(ctx);
+
+    match config.transport {
+        Transport::Stdio => {
+            tracing::info!(
+                target: "deribit_mcp::startup",
+                env = env_label,
+                endpoint = %endpoint,
+                transport = "stdio",
+                "starting on {env_label} ({endpoint}); transport=stdio"
+            );
+            let running = server
+                .serve(stdio())
+                .await
+                .context("starting stdio transport")?;
+            let reason = running.waiting().await.context("stdio service exited")?;
+            tracing::info!(?reason, "stdio service stopped");
+        }
+        Transport::Http => {
+            tracing::error!("HTTP transport lands in v0.1-09");
+            anyhow::bail!("HTTP transport not yet implemented (v0.1-09)");
+        }
+    }
 
     Ok(())
 }

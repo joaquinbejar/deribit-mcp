@@ -127,6 +127,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     every URI returns a structured `Validation` error.
 - `DeribitMcpServer::new` now constructs both registries from the
   context (was empty stubs).
+- stdio transport wiring (`src/main.rs`):
+  - Async `tokio::main` runtime; `Config::load` → `init_tracing` →
+    `AdapterContext::new` → `DeribitMcpServer::new` → `serve(stdio())`.
+  - INFO banner on startup with the resolved environment label
+    (`TESTNET` / `MAINNET`), endpoint, and transport.
+  - EOF on stdin propagates through `rmcp`'s service runner into a
+    clean exit (`QuitReason::Closed`), exit code 0.
+  - HTTP transport branch returns a structured error pointing at
+    v0.1-09 — the wiring lands in the next issue.
+- `tests/stdio_handshake.rs`: in-process integration test that drives
+  the server over a pair of `tokio::io::duplex` pipes, sends one
+  `initialize` request, asserts the response shape (protocol version,
+  serverInfo, capabilities), and verifies graceful EOF shutdown.
 - `CHANGELOG.md` following Keep-a-Changelog.
 
 ### Repository
