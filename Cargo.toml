@@ -99,6 +99,10 @@ tokio = { version = "1", features = ["test-util"] }
 # Snapshots are committed under `tests/snapshots/` and reviewed
 # deliberately on every PR.
 insta = { version = "1", features = ["yaml", "redactions"] }
+# Mock HTTP server for integration tests against `deribit-http`.
+# Used in `tests/integration.rs` to exercise tool / resource handlers
+# end to end without hitting the live testnet.
+mockito = "1"
 
 [profile.release]
 opt-level = 3
