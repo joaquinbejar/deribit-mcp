@@ -206,14 +206,48 @@ impl From<HttpError> for AdapterError {
             },
             HttpError::RequestFailed(message)
             | HttpError::InvalidResponse(message)
-            | HttpError::ParseError(message) => AdapterError::Upstream {
-                inner: UpstreamErrorKind::Http { message },
-            },
+            | HttpError::ParseError(message) => {
+                // The upstream `deribit-http` client surfaces Deribit
+                // API error responses through `RequestFailed` carrying a
+                // `"API error: <code> - <text>"` body (sometimes
+                // prefixed with the operation name, e.g. `"Buy order
+                // failed: API error: 11044 - …"`). Extract the
+                // structured code so the LLM sees a typed
+                // `UpstreamErrorKind::Api { code, message }` instead of
+                // an opaque `Http { message }`.
+                if let Some((code, msg)) = parse_api_error(&message) {
+                    return AdapterError::Upstream {
+                        inner: UpstreamErrorKind::Api {
+                            code: Some(code),
+                            message: msg,
+                        },
+                    };
+                }
+                AdapterError::Upstream {
+                    inner: UpstreamErrorKind::Http { message },
+                }
+            }
             HttpError::ConfigError(_) => {
                 AdapterError::internal("upstream HTTP client misconfigured")
             }
         }
     }
+}
+
+/// Parse an `"API error: <code> - <message>"` substring out of a
+/// `deribit-http` `RequestFailed` body. Returns `None` when the
+/// pattern is not found or the code does not parse as `i64`
+/// (matching the `UpstreamErrorKind::Api { code: Option<i64>, … }`
+/// wire shape). Used at the `HttpError → AdapterError` boundary to
+/// route Deribit API errors into the structured
+/// `UpstreamErrorKind::Api` shape.
+#[cold]
+#[inline(never)]
+fn parse_api_error(message: &str) -> Option<(i64, String)> {
+    let after = message.split_once("API error:")?.1.trim_start();
+    let (code_str, rest) = after.split_once(" - ").or_else(|| after.split_once('-'))?;
+    let code: i64 = code_str.trim().parse().ok()?;
+    Some((code, rest.trim().to_string()))
 }
 
 /// Classify a free-text upstream auth-failure message into the
