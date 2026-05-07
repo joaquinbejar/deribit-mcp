@@ -541,6 +541,8 @@ dependencies = [
  "deribit-http",
  "deribit-websocket",
  "dotenvy",
+ "futures-core",
+ "futures-util",
  "hyper",
  "hyper-util",
  "insta",

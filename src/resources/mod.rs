@@ -29,7 +29,7 @@ pub mod static_;
 /// [`ResourceRegistry::read`], which returns
 /// [`AdapterError::Validation`] for variants the milestone has not yet
 /// wired (live resources land in v0.3).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ResourceUri {
     /// `deribit://currencies` — the currency catalogue (static).
     Currencies,

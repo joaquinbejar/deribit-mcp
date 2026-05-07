@@ -85,6 +85,10 @@ tower = "0.5"
 hyper = { version = "1", features = ["server", "http1"] }
 hyper-util = { version = "0.1", features = ["server", "tokio"] }
 tokio-util = { version = "0.7", features = ["rt"] }
+# Stream + future combinators for the live resource registry
+# (`tokio_stream::StreamExt::next` requires this).
+futures-core = "0.3"
+futures-util = "0.3"
 
 # Sibling Deribit Rust family. Auth, rate limiting, reconnect, wire codecs all
 # live upstream — this crate is a thin adapter (ADR-0001).
