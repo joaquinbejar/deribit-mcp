@@ -351,12 +351,13 @@ mod tests {
     #[test]
     fn build_without_creds_includes_only_read() {
         let registry = ToolRegistry::build(&ctx(false, false));
-        // No actual tools land until v0.1-10/11/-2/-4 — the v0.1-06
-        // delivery is just the framework, so the empty register()
-        // bodies leave the registry empty here. The test guards the
-        // gate logic stays consistent with `has_credentials()` /
-        // `allow_trading`.
-        assert!(registry.is_empty());
+        // v0.1-10 ships 5 Read-class tools; Account / Trading
+        // families remain empty because v0.2 / v0.4 have not landed.
+        assert_eq!(registry.len(), 5);
+        for tool in registry.list() {
+            let entry = registry.get(tool.name.as_ref()).expect("entry");
+            assert_eq!(entry.class, ToolClass::Read, "{}", tool.name);
+        }
     }
 
     #[tokio::test]

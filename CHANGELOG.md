@@ -106,6 +106,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     requirement for the `NotEnabled` payload.
 - Per-family registration hooks (`src/tools/{public,account,trading}.rs`)
   are empty in v0.1-06 — v0.1-10 / v0.1-11 / v0.2 / v0.4 fill them.
+- Public `Read` tools — market data (`src/tools/public.rs`):
+  - `get_ticker { instrument_name }` — latest ticker.
+  - `get_instrument { instrument_name }` — static metadata.
+  - `list_instruments { currency, kind?, expired? }` — instruments
+    by currency, filterable.
+  - `get_order_book { instrument_name, depth? }` — order book
+    snapshot.
+  - `get_index_price { index_name }` — current index price.
+  - Each tool: typed `Input` with `JsonSchema`, `Read` effect class,
+    `serde_json::Value` output carrying the upstream JSON verbatim.
+  - Bad input → `AdapterError::Validation { field: "arguments", ... }`
+    with the upstream serde error verbatim, so the LLM sees what's
+    wrong.
+- `schemars` rolled forward to `1` to align with the major `rmcp`
+  re-exports (`rmcp::schemars`) so tool input structs interoperate
+  with `Tool::with_input_schema::<T>()` without two-major linkage.
 - Static resource registry, `deribit://` URI parser, and read
   dispatch (`src/resources/mod.rs`):
   - `ResourceUri` strongly-typed variants for every documented
