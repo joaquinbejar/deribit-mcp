@@ -115,6 +115,16 @@ pub enum AuthFailureReason {
     Unauthorized,
     /// Token refresh / fork failed mid-session.
     TokenRefreshFailed,
+    /// A previously valid token expired and the upstream refresh
+    /// flow could not obtain a replacement (network error during
+    /// refresh, refresh-token revoked, …). Distinct from
+    /// [`Self::TokenRefreshFailed`] which covers the explicit
+    /// `exchange_token` / `fork_token` flows.
+    TokenExpiredAndRefreshFailed,
+    /// Account scope does not permit the requested action (e.g.
+    /// trading scope missing on a `Trading` call). Surfaced from
+    /// the upstream API error code set.
+    InsufficientScope,
     /// Adapter recognised the upstream auth error but couldn't classify
     /// it any further.
     Other,
@@ -294,6 +304,8 @@ mod tests {
             AuthFailureReason::MissingCredentials,
             AuthFailureReason::Unauthorized,
             AuthFailureReason::TokenRefreshFailed,
+            AuthFailureReason::TokenExpiredAndRefreshFailed,
+            AuthFailureReason::InsufficientScope,
             AuthFailureReason::Other,
         ] {
             let err = AdapterError::Auth { reason };

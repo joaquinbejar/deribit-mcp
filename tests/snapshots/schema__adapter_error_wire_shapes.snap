@@ -11,6 +11,12 @@ expression: serialised
 - - auth_token_refresh_failed
   - kind: Auth
     reason: token_refresh_failed
+- - auth_token_expired_and_refresh_failed
+  - kind: Auth
+    reason: token_expired_and_refresh_failed
+- - auth_insufficient_scope
+  - kind: Auth
+    reason: insufficient_scope
 - - auth_other
   - kind: Auth
     reason: other

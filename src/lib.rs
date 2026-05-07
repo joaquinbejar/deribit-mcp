@@ -40,7 +40,7 @@ pub mod resources;
 pub mod server;
 pub mod tools;
 
-pub use crate::context::AdapterContext;
+pub use crate::context::{AdapterContext, AuthState};
 pub use crate::error::{AdapterError, AuthFailureReason, UpstreamErrorKind};
 pub use crate::resources::{
     ResourceContent, ResourceList, ResourceRegistry, ResourceUri, parse_resource_uri,

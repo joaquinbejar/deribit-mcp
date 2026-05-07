@@ -9,6 +9,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- OAuth wiring through `deribit-http` (`src/context.rs`,
+  `src/error.rs`):
+  - `AdapterContext::auth_state()` returns a typed
+    [`AuthState::Anonymous`] / [`AuthState::Configured`] enum so
+    the registry / dispatcher decide whether `Account` / `Trading`
+    tools register at all.
+  - `http_config_from` now forwards `client_id` / `client_secret`
+    from our resolved `Config` into the upstream
+    `HttpConfig.credentials`. Removes the dependency on dotenvy
+    populating the process env before `DeribitHttpClient` reads
+    its own defaults.
+  - First private call triggers the upstream `AuthManager`'s
+    OAuth client-credentials flow lazily, caches the token, and
+    refreshes ~30 s before `expires_in` (handled inside
+    `deribit-http`).
+  - `AuthFailureReason` gains `TokenExpiredAndRefreshFailed` and
+    `InsufficientScope` variants for the v0.2 auth-error mapping
+    (v0.2-05 wires the upstream-error → variant routing).
+  - Integration tests
+    (`first_private_call_triggers_oauth_against_mock`,
+    `second_private_call_reuses_token`) drive the full OAuth +
+    private-call round-trip against `mockito` and assert the auth
+    endpoint is hit exactly once across multiple private calls.
+
 - Project skeleton, dependency set, and module tree per
   `doc/ARCHITECTURE.md` §2:
   - `Cargo.toml` with the v0.1 dependency set: `rmcp`, `tokio`,

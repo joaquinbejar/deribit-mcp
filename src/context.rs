@@ -10,6 +10,7 @@
 
 use std::sync::Arc;
 
+use deribit_http::config::credentials::ApiCredentials;
 use deribit_http::{DeribitHttpClient, HttpConfig};
 use deribit_websocket::client::DeribitWebSocketClient;
 use deribit_websocket::config::WebSocketConfig;
@@ -67,6 +68,25 @@ impl AdapterContext {
         self.config.client_id.is_some() && self.config.client_secret.is_some()
     }
 
+    /// Snapshot of the OAuth state. Drives registry decisions
+    /// (whether `Account` / `Trading` tools register at all) and
+    /// gives downstream callers a stable enum to match on instead
+    /// of a free-form `bool`.
+    ///
+    /// Auth is **lazy** — `Configured` does not imply that
+    /// `deribit-http` has yet issued a `public/auth` call. The
+    /// upstream `AuthManager` triggers OAuth on the first private
+    /// endpoint hit and refreshes ~30 s before `expires_in`
+    /// (handled inside `deribit-http`).
+    #[must_use]
+    pub fn auth_state(&self) -> AuthState {
+        if self.has_credentials() {
+            AuthState::Configured
+        } else {
+            AuthState::Anonymous
+        }
+    }
+
     /// Lazily construct (or return) the WebSocket client.
     ///
     /// # Errors
@@ -89,6 +109,13 @@ impl AdapterContext {
 }
 
 /// Build the upstream `HttpConfig` from our resolved `Config`.
+///
+/// Forwards `client_id` / `client_secret` from our resolved `Config`
+/// into the upstream `ApiCredentials`. Without this step, the upstream
+/// `HttpConfig::testnet()` / `production()` constructors fall back to
+/// `DERIBIT_CLIENT_ID` / `DERIBIT_CLIENT_SECRET` env vars — which may
+/// already match, but only if dotenvy has populated the process
+/// environment. Forwarding explicitly removes the dependency.
 fn http_config_from(config: &Config) -> Result<HttpConfig, AdapterError> {
     let parsed = Url::parse(&config.endpoint)
         .map_err(|err| AdapterError::validation("endpoint", format!("invalid URL: {err}")))?;
@@ -101,7 +128,30 @@ fn http_config_from(config: &Config) -> Result<HttpConfig, AdapterError> {
     };
     cfg.base_url = parsed;
     cfg.testnet = testnet;
+    // Match on references first so we never clone the secret on the
+    // partial-credential branch (where the clone would be discarded
+    // and only inflate the number of in-memory copies of the secret
+    // for `tracing`/heap dumps to potentially observe).
+    cfg.credentials = match (config.client_id.as_ref(), config.client_secret.as_ref()) {
+        (Some(client_id), Some(client_secret)) => Some(ApiCredentials {
+            client_id: Some(client_id.clone()),
+            client_secret: Some(client_secret.clone()),
+        }),
+        _ => None,
+    };
     Ok(cfg)
+}
+
+/// OAuth posture the adapter advertises to its callers.
+///
+/// Returned by [`AdapterContext::auth_state`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AuthState {
+    /// No credentials configured — only public `Read` tools register.
+    Anonymous,
+    /// Credentials present in the config. The first private call
+    /// triggers OAuth via the upstream `AuthManager`.
+    Configured,
 }
 
 /// Build the upstream `WebSocketConfig` from our resolved `Config`.
@@ -175,5 +225,41 @@ mod tests {
         c.client_id = Some("id".into());
         let ctx = AdapterContext::new(Arc::new(c)).expect("context");
         assert!(!ctx.has_credentials());
+    }
+
+    #[test]
+    fn auth_state_is_anonymous_without_credentials() {
+        let ctx =
+            AdapterContext::new(Arc::new(cfg("https://test.deribit.com", false))).expect("ctx");
+        assert_eq!(ctx.auth_state(), AuthState::Anonymous);
+    }
+
+    #[test]
+    fn auth_state_is_configured_with_credentials() {
+        let ctx =
+            AdapterContext::new(Arc::new(cfg("https://test.deribit.com", true))).expect("ctx");
+        assert_eq!(ctx.auth_state(), AuthState::Configured);
+    }
+
+    #[test]
+    fn http_config_carries_credentials_into_upstream() {
+        // We can't observe `HttpConfig.credentials` from outside the
+        // adapter (the field is `pub` but the client owns the value),
+        // so this test pins the struct-level forwarding by building
+        // the same config the constructor builds and asserting the
+        // credentials it places on `HttpConfig`.
+        let resolved = cfg("https://test.deribit.com", true);
+        let http_cfg = http_config_from(&resolved).expect("http cfg");
+        let creds = http_cfg.credentials.as_ref().expect("credentials present");
+        assert_eq!(creds.client_id.as_deref(), Some("id"));
+        assert_eq!(creds.client_secret.as_deref(), Some("secret"));
+    }
+
+    #[test]
+    fn http_config_omits_credentials_without_both() {
+        let mut resolved = cfg("https://test.deribit.com", false);
+        resolved.client_id = Some("id".into());
+        let http_cfg = http_config_from(&resolved).expect("http cfg");
+        assert!(http_cfg.credentials.is_none());
     }
 }

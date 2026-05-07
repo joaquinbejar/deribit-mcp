@@ -73,6 +73,18 @@ fn adapter_error_wire_shapes_unchanged() {
             },
         ),
         (
+            "auth_token_expired_and_refresh_failed",
+            AdapterError::Auth {
+                reason: AuthFailureReason::TokenExpiredAndRefreshFailed,
+            },
+        ),
+        (
+            "auth_insufficient_scope",
+            AdapterError::Auth {
+                reason: AuthFailureReason::InsufficientScope,
+            },
+        ),
+        (
             "auth_other",
             AdapterError::Auth {
                 reason: AuthFailureReason::Other,
