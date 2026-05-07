@@ -8,14 +8,44 @@ concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
+# Repo-wide read-only default. Per-job blocks below ramp up only
+# what each step actually needs — `packages: write` for the image
+# push, nothing else for the crates publish.
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: short
   IMAGE: ghcr.io/${{ github.repository }}
 
 jobs:
+  validate_tag:
+    name: validate tag vs Cargo.toml
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+
+      - name: Reject non-SemVer tags + crate-version mismatches
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          if ! [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::tag '$tag' does not match the required v<major>.<minor>.<patch> shape"
+            exit 1
+          fi
+          version="${tag#v}"
+          crate_version=$(awk -F\" '/^version = "/ { print $2; exit }' Cargo.toml)
+          if [ "$crate_version" != "$version" ]; then
+            echo "::error::tag '$tag' (=> $version) does not match Cargo.toml version '$crate_version'. Bump the manifest before tagging."
+            exit 1
+          fi
+          echo "tag $tag matches Cargo.toml version $crate_version"
+
   image:
     name: GHCR image build + push
+    needs: validate_tag
     runs-on: ubuntu-24.04
     permissions:
       contents: read

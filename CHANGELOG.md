@@ -193,7 +193,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `initialize` request, asserts the response shape (protocol version,
   serverInfo, capabilities), and verifies graceful EOF shutdown.
 - Tag-driven release workflow (`.github/workflows/release.yml`):
-  - Triggered by `git push <vX.Y.Z>` tags only.
+  - Triggered by pushing a `vX.Y.Z` tag (e.g. `git tag v0.1.0
+    && git push origin v0.1.0`).
+  - Repo-wide `permissions: { contents: read }` default; per-job
+    blocks ramp up only what each step needs (`packages: write`
+    for the GHCR push).
+  - `validate_tag` job runs first: rejects non-SemVer tags and
+    fails the run if `Cargo.toml`'s `package.version` does not
+    match the tag (minus the leading `v`). The image and crate
+    publishes are gated on it.
   - `image` job builds the container with Docker Buildx, pushes it
     to GHCR (`ghcr.io/<owner>/<repo>`) tagged `:vX.Y.Z` and
     `:latest`, attaches OCI labels (title / source / revision /
