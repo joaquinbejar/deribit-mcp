@@ -2,9 +2,11 @@
 //!
 //! Snapshots every public-tool input schema and the
 //! `AdapterError` / `UpstreamErrorKind` wire shape. Any change to
-//! the snapshots requires a deliberate review at PR time + a
+//! the snapshots requires a deliberate review at PR time and a
 //! `CHANGELOG.md` entry under `[Unreleased]` describing whether the
-//! change is additive or breaking (per `doc/TESTING.md` §3).
+//! change is additive (new tool / variant) or breaking (renamed
+//! field, removed variant, schema tightened). The MCP wire shape is
+//! a public contract.
 
 use deribit_mcp::config::{Config, LogFormat, Transport};
 use deribit_mcp::context::AdapterContext;
