@@ -34,7 +34,6 @@ const DEFAULT_RATE_LIMIT_RETRY_MS: u64 = 1_000;
 /// when a structurally new error kind appears.
 #[derive(Debug, Error, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind")]
-#[non_exhaustive]
 pub enum AdapterError {
     /// Authentication / authorization failure.
     #[error("authentication failed: {reason:?}")]
@@ -108,7 +107,6 @@ pub enum AdapterError {
 /// Why authentication failed. Closed set — exhaustive matches required.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-#[non_exhaustive]
 pub enum AuthFailureReason {
     /// Credentials missing — neither client_id nor client_secret were
     /// configured.
@@ -125,7 +123,6 @@ pub enum AuthFailureReason {
 /// Structured upstream-error payload. Closed set.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "transport", rename_all = "snake_case")]
-#[non_exhaustive]
 pub enum UpstreamErrorKind {
     /// Deribit JSON-RPC API error: a non-rate-limit, non-auth failure
     /// returned with a `code` + `message` body.

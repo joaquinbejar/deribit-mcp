@@ -13,7 +13,6 @@ use std::sync::Arc;
 use deribit_http::{DeribitHttpClient, HttpConfig};
 use deribit_websocket::client::DeribitWebSocketClient;
 use deribit_websocket::config::WebSocketConfig;
-use deribit_websocket::error::WebSocketError;
 use tokio::sync::OnceCell;
 use url::Url;
 
@@ -47,8 +46,8 @@ impl AdapterContext {
     /// # Errors
     ///
     /// Returns [`AdapterError::Validation`] when the configured Deribit
-    /// endpoint is not a valid URL, and [`AdapterError::Internal`] for
-    /// any other startup failure that the HTTP client surfaces.
+    /// endpoint is not a valid URL. The upstream HTTP client itself is
+    /// infallible to construct.
     pub fn new(config: Arc<Config>) -> Result<Self, AdapterError> {
         let http_cfg = http_config_from(&config)?;
         let http = DeribitHttpClient::with_config(http_cfg);
@@ -72,15 +71,16 @@ impl AdapterContext {
     ///
     /// # Errors
     ///
-    /// Returns [`AdapterError::Internal`] when the WebSocket URL cannot
-    /// be parsed and [`AdapterError::Upstream`] when the upstream
-    /// WebSocket crate refuses the configuration.
+    /// Returns [`AdapterError::Upstream`] (with
+    /// [`UpstreamErrorKind::Websocket`]) when the upstream WebSocket
+    /// crate refuses the configuration — typically a transport
+    /// failure on the very first connect attempt.
+    ///
+    /// [`UpstreamErrorKind::Websocket`]: crate::error::UpstreamErrorKind::Websocket
     pub async fn websocket(&self) -> Result<&DeribitWebSocketClient, AdapterError> {
         self.ws
             .get_or_try_init(|| async {
-                let cfg = ws_config_from(&self.config).map_err(|_| {
-                    WebSocketError::ConnectionFailed("invalid websocket URL".to_string())
-                })?;
+                let cfg = ws_config_from(&self.config);
                 DeribitWebSocketClient::new(&cfg)
             })
             .await
@@ -105,13 +105,17 @@ fn http_config_from(config: &Config) -> Result<HttpConfig, AdapterError> {
 }
 
 /// Build the upstream `WebSocketConfig` from our resolved `Config`.
-fn ws_config_from(config: &Config) -> Result<WebSocketConfig, url::ParseError> {
+///
+/// Infallible: both URLs are compile-time constants and parse
+/// successfully. The `expect` here would only fire if the upstream
+/// crate's URL parser regressed.
+fn ws_config_from(config: &Config) -> WebSocketConfig {
     let url = if endpoint_is_mainnet(&config.endpoint) {
         MAINNET_WS_URL
     } else {
         TESTNET_WS_URL
     };
-    WebSocketConfig::with_url(url)
+    WebSocketConfig::with_url(url).expect("compile-time WS URL constant must parse")
 }
 
 fn endpoint_is_mainnet(endpoint: &str) -> bool {
