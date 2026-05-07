@@ -925,3 +925,55 @@ async fn cancel_all_by_instrument_dispatches_through_registry() {
     assert_eq!(out["cancelled"].as_u64(), Some(0));
     cancel_mock.assert_async().await;
 }
+
+fn ctx_with_mock_cap(server_url: &str, max_order_usd: u64) -> Arc<AdapterContext> {
+    use deribit_http::config::credentials::ApiCredentials;
+    let server_url = server_url.trim_end_matches('/');
+    let with_prefix = format!("{server_url}/api/v2");
+    let parsed = Url::parse(&with_prefix).expect("mock URL");
+    let mut http_cfg = HttpConfig::testnet();
+    http_cfg.base_url = parsed;
+    http_cfg.testnet = true;
+    http_cfg.timeout = Duration::from_secs(2);
+    http_cfg.credentials = Some(ApiCredentials {
+        client_id: Some("id".to_string()),
+        client_secret: Some("secret".to_string()),
+    });
+    let http = DeribitHttpClient::with_config(http_cfg);
+    let mut cfg = cfg(&with_prefix, true, true);
+    cfg.max_order_usd = Some(max_order_usd);
+    let mut ctx = AdapterContext::new(Arc::new(cfg)).expect("ctx");
+    ctx.http = http;
+    Arc::new(ctx)
+}
+
+#[tokio::test]
+async fn place_order_over_size_cap_rejected_before_network() {
+    // BTC-PERPETUAL inverse: amount = USD notional. Cap = 10_000.
+    // Asking for 50_000 USD must short-circuit with SizeCapExceeded
+    // and never hit the network.
+    let server = mockito::Server::new_async().await;
+    let ctx = ctx_with_mock_cap(&server.url(), 10_000);
+    let registry = ToolRegistry::build(&ctx);
+    let err = registry
+        .call(
+            &ctx,
+            "place_order",
+            json!({
+                "instrument_name": "BTC-PERPETUAL",
+                "side": "buy",
+                "amount": 50_000.0,
+                "type": "limit",
+                "price": 50_000.0
+            }),
+        )
+        .await
+        .unwrap_err();
+    match err {
+        AdapterError::SizeCapExceeded { requested, cap } => {
+            assert!((requested - 50_000.0).abs() < 1e-6);
+            assert!((cap - 10_000.0).abs() < 1e-6);
+        }
+        other => panic!("unexpected: {other:?}"),
+    }
+}

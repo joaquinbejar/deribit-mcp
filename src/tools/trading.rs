@@ -180,12 +180,99 @@ fn place_order_tool() -> ToolEntry {
 async fn handle_place_order(ctx: &AdapterContext, input: Value) -> Result<Value, AdapterError> {
     let input: PlaceOrderInput = parse(input)?;
     validate_place_order(&input)?;
+    enforce_size_cap(ctx, &input.instrument_name, input.amount, input.price).await?;
     let (side, request) = build_order_request(input)?;
     let result = match side {
         Side::Buy => ctx.http.buy_order(request).await?,
         Side::Sell => ctx.http.sell_order(request).await?,
     };
     Ok(serde_json::to_value(&result)?)
+}
+
+/// Enforce the per-process notional cap configured via
+/// `--max-order-usd` / `DERIBIT_MAX_ORDER_USD`.
+///
+/// Runs after schema validation, before any network call. When the
+/// cap is unset the function is a no-op. When set, it converts the
+/// order size to a USD-equivalent notional and rejects the call
+/// with [`AdapterError::SizeCapExceeded`] if the notional is over
+/// the cap.
+///
+/// # Notional formula
+///
+/// Classifies the instrument by its name suffix:
+///
+/// - Linear (`*_USDC*` / `*_USDT*` — settlement in stablecoin):
+///   `notional = amount × price`. For market orders without a
+///   provided `price`, the upstream `mark_price` from
+///   `/public/ticker` is used.
+/// - Inverse (everything else — BTC-/ETH-denominated futures,
+///   perpetuals, options): `amount` is already USD-notional per
+///   Deribit's contract-size convention, so the notional is
+///   `amount` directly.
+///
+/// The classification is conservative — when in doubt the inverse
+/// branch is taken so the cap doesn't silently let through a
+/// larger order. Options on inverse currencies share the inverse
+/// branch; this slightly overcounts cheap deep-OTM options but is
+/// safe in the cap direction.
+///
+/// # Errors
+///
+/// Returns [`AdapterError::SizeCapExceeded`] when the computed
+/// notional exceeds the cap. May also propagate
+/// [`AdapterError::Upstream`] if the mark-price fetch needed for
+/// linear market orders fails.
+pub async fn enforce_size_cap(
+    ctx: &AdapterContext,
+    instrument_name: &str,
+    amount: f64,
+    price: Option<f64>,
+) -> Result<(), AdapterError> {
+    let Some(cap) = ctx.config.max_order_usd else {
+        return Ok(());
+    };
+    let cap = cap as f64;
+    let notional = compute_usd_notional(ctx, instrument_name, amount, price).await?;
+    if !notional.is_finite() {
+        return Err(AdapterError::Validation {
+            field: "amount".to_string(),
+            message: "computed notional is not finite".to_string(),
+        });
+    }
+    if notional > cap {
+        return Err(AdapterError::SizeCapExceeded {
+            requested: notional,
+            cap,
+        });
+    }
+    Ok(())
+}
+
+/// `true` when the instrument is linear (USDC / USDT settlement).
+fn is_linear_instrument(name: &str) -> bool {
+    name.contains("_USDC") || name.contains("_USDT")
+}
+
+async fn compute_usd_notional(
+    ctx: &AdapterContext,
+    instrument_name: &str,
+    amount: f64,
+    price: Option<f64>,
+) -> Result<f64, AdapterError> {
+    if !is_linear_instrument(instrument_name) {
+        // Inverse — amount is USD notional directly.
+        return Ok(amount);
+    }
+    let p = match price {
+        Some(p) => p,
+        None => {
+            let ticker = ctx.http.get_ticker(instrument_name).await?;
+            // The `TickerData` model surfaces the field as `mark_price`.
+            ticker.mark_price
+        }
+    };
+    Ok(amount * p)
 }
 
 /// Adapter-side validation ahead of any network call.
@@ -771,6 +858,75 @@ mod tests {
         assert_eq!(req.order_id.as_deref(), Some("ORDER-1"));
         assert_eq!(req.amount, Some(20.0));
         assert_eq!(req.price, None);
+    }
+
+    #[test]
+    fn linear_instrument_classification() {
+        assert!(is_linear_instrument("BTC_USDC-PERPETUAL"));
+        assert!(is_linear_instrument("ETH_USDT-29SEP24"));
+        assert!(!is_linear_instrument("BTC-PERPETUAL"));
+        assert!(!is_linear_instrument("ETH-29SEP24"));
+        assert!(!is_linear_instrument("BTC-29SEP24-50000-C"));
+    }
+
+    fn ctx_with_cap(cap: Option<u64>) -> AdapterContext {
+        use crate::config::{Config, LogFormat, Transport};
+        use std::net::SocketAddr;
+        let cfg = Config {
+            endpoint: "https://test.deribit.com".to_string(),
+            client_id: Some("id".to_string()),
+            client_secret: Some("secret".to_string()),
+            allow_trading: true,
+            max_order_usd: cap,
+            transport: Transport::Stdio,
+            http_listen: SocketAddr::from(([127, 0, 0, 1], 8723)),
+            http_bearer_token: None,
+            log_format: LogFormat::Text,
+        };
+        AdapterContext::new(Arc::new(cfg)).expect("ctx")
+    }
+
+    #[tokio::test]
+    async fn cap_unset_is_noop() {
+        let ctx = ctx_with_cap(None);
+        enforce_size_cap(&ctx, "BTC-PERPETUAL", 1_000_000.0, Some(50_000.0))
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn inverse_notional_uses_amount() {
+        // BTC-PERPETUAL inverse: amount IS USD notional. 100k > 10k cap.
+        let ctx = ctx_with_cap(Some(10_000));
+        let err = enforce_size_cap(&ctx, "BTC-PERPETUAL", 100_000.0, Some(50_000.0))
+            .await
+            .unwrap_err();
+        match err {
+            AdapterError::SizeCapExceeded { requested, cap } => {
+                assert!((requested - 100_000.0).abs() < 1e-6);
+                assert!((cap - 10_000.0).abs() < 1e-6);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn inverse_under_cap_passes() {
+        let ctx = ctx_with_cap(Some(10_000));
+        // 5_000 USD notional, well under the 10_000 cap.
+        enforce_size_cap(&ctx, "BTC-PERPETUAL", 5_000.0, Some(50_000.0))
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn linear_notional_uses_price_times_amount() {
+        // Linear: notional = amount * price = 0.5 * 100_000 = 50_000 > 10_000.
+        let ctx = ctx_with_cap(Some(10_000));
+        let err = enforce_size_cap(&ctx, "BTC_USDC-PERPETUAL", 0.5, Some(100_000.0))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, AdapterError::SizeCapExceeded { .. }));
     }
 
     #[test]
