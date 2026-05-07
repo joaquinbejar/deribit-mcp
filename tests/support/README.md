@@ -7,16 +7,24 @@ Shared helpers for the integration suite. One module per concern.
 In-process mock Deribit WebSocket server used by
 `tests/integration_live.rs`.
 
+An integration-test binary picks the helpers up via a regular
+sibling-module declaration — there is no `tests` crate / module by
+default, so the import path is `support::mock_ws::MockWsServer`
+(or `crate::support::…` from inside the test binary's own root).
+
 ```rust
-use tests::support::mock_ws::MockWsServer;
+// tests/integration_live.rs
+mod support;
+
+use support::mock_ws::MockWsServer;
 
 #[tokio::test]
-async fn …() {
+async fn ...() {
     let mock = MockWsServer::start().await;
     let url = mock.ws_url();          // ws://127.0.0.1:<port>/ws/api/v2
 
     // Drive one of the live-resource paths against `url`.
-    // …
+    // ...
 
     // Push scripted frames.
     mock.push_frame(

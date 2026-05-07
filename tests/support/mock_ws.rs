@@ -6,12 +6,13 @@
 //!
 //! - `public/auth` → canned token response.
 //! - `public/subscribe` / `public/unsubscribe` → canned ack.
-//! - `set_heartbeat` / `test_request` → no-op acks.
+//! - `public/set_heartbeat` / `public/test` → no-op acks.
 //!
 //! Tests script the frame sequence the mock should emit on top of
 //! a subscription via [`MockWsServer::push_frame`]. The frames are
-//! relayed to every connected client wrapped in the standard
-//! `subscription` notification envelope.
+//! wrapped in the standard `subscription` notification envelope and
+//! relayed only to clients that have called `public/subscribe` for
+//! the matching `params.channel`.
 //!
 //! No global state. One instance per test. Dropping the server
 //! flips the cancellation token and the listener task exits within
@@ -83,8 +84,9 @@ impl MockWsServer {
     }
 
     /// Push one decoded subscription frame. The mock wraps it in
-    /// the standard JSON-RPC `subscription` envelope and relays it
-    /// to every currently connected client.
+    /// the standard JSON-RPC `subscription` envelope and relays
+    /// it to every currently connected client whose
+    /// `public/subscribe` ack still includes this channel name.
     pub fn push_frame(&self, channel: &str, data: Value) {
         let envelope = json!({
             "jsonrpc": "2.0",
@@ -241,7 +243,4 @@ async fn handle_connection(
     drop(tx);
     drop(rx);
     tokio::time::sleep(Duration::from_millis(5)).await;
-    // Suppress unused-binding lint on `subscribed` when the test
-    // never subscribes to anything.
-    let _ = &subscribed;
 }
