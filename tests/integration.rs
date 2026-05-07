@@ -1051,3 +1051,130 @@ async fn place_order_linear_market_fetches_mark_price_for_cap() {
     }
     ticker_mock.assert_async().await;
 }
+
+#[tokio::test]
+async fn trading_tools_register_all_with_allow_trading() {
+    let ctx = ctx_with_mock_creds("http://127.0.0.1:0/", true, true);
+    let registry = ToolRegistry::build(&ctx);
+    for name in [
+        "place_order",
+        "edit_order",
+        "cancel_order",
+        "cancel_all_by_currency",
+        "cancel_all_by_instrument",
+    ] {
+        assert!(
+            registry.contains(name),
+            "trading tool `{name}` must register with --allow-trading + creds"
+        );
+        let entry = registry.get(name).expect("entry");
+        assert_eq!(entry.class(), deribit_mcp::tools::ToolClass::Trading);
+    }
+}
+
+#[tokio::test]
+async fn cancel_order_upstream_order_not_found_maps_to_api_code_11044() {
+    // Deribit returns `{"error": {"code": 11044, "message": "..."}}`
+    // for a missing order; `deribit-http` surfaces this as
+    // `RequestFailed("API error: 11044 - ...")`. The adapter parses
+    // that prefix at the `HttpError → AdapterError` boundary into
+    // `UpstreamErrorKind::Api { code: Some(11044), ... }`.
+    let mut server = mockito::Server::new_async().await;
+    let auth_body = serde_json::json!({
+        "jsonrpc":"2.0","id":0,
+        "result": {
+            "access_token":"a","expires_in":900,
+            "refresh_token":"r","scope":"s","token_type":"Bearer"
+        }
+    });
+    server
+        .mock("GET", "/api/v2/public/auth")
+        .match_query(mockito::Matcher::Any)
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(auth_body.to_string())
+        .expect_at_least(1)
+        .create_async()
+        .await;
+    let cancel_err_body = serde_json::json!({
+        "jsonrpc":"2.0","id":0,
+        "error": {
+            "code": 11044,
+            "message": "not_open_order"
+        }
+    });
+    server
+        .mock("GET", "/api/v2/private/cancel")
+        .match_query(mockito::Matcher::Any)
+        .match_header(
+            "authorization",
+            mockito::Matcher::Regex("^Bearer ".to_string()),
+        )
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(cancel_err_body.to_string())
+        .expect(1)
+        .create_async()
+        .await;
+
+    let ctx = ctx_with_mock_creds(&server.url(), true, true);
+    let registry = ToolRegistry::build(&ctx);
+    let err = registry
+        .call(&ctx, "cancel_order", json!({"order_id": "MISSING"}))
+        .await
+        .unwrap_err();
+    match err {
+        AdapterError::Upstream {
+            inner: deribit_mcp::error::UpstreamErrorKind::Api { code, message },
+        } => {
+            assert_eq!(code, Some(11044));
+            assert!(message.contains("not_open_order"), "msg={message}");
+        }
+        other => panic!("unexpected: {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn cancel_all_by_currency_zero_count_returns_zero() {
+    let mut server = mockito::Server::new_async().await;
+    let auth_body = serde_json::json!({
+        "jsonrpc":"2.0","id":0,
+        "result": {
+            "access_token":"a","expires_in":900,
+            "refresh_token":"r","scope":"s","token_type":"Bearer"
+        }
+    });
+    server
+        .mock("GET", "/api/v2/public/auth")
+        .match_query(mockito::Matcher::Any)
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(auth_body.to_string())
+        .expect_at_least(1)
+        .create_async()
+        .await;
+    let cancel_body = serde_json::json!({"jsonrpc":"2.0","id":0,"result": 0});
+    server
+        .mock("GET", "/api/v2/private/cancel_all_by_currency")
+        .match_query(mockito::Matcher::UrlEncoded(
+            "currency".into(),
+            "BTC".into(),
+        ))
+        .match_header(
+            "authorization",
+            mockito::Matcher::Regex("^Bearer ".to_string()),
+        )
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(cancel_body.to_string())
+        .expect(1)
+        .create_async()
+        .await;
+    let ctx = ctx_with_mock_creds(&server.url(), true, true);
+    let registry = ToolRegistry::build(&ctx);
+    let out = registry
+        .call(&ctx, "cancel_all_by_currency", json!({"currency": "BTC"}))
+        .await
+        .expect("ok");
+    assert_eq!(out["cancelled"].as_u64(), Some(0));
+}

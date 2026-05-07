@@ -179,3 +179,93 @@ async fn live_testnet_account_smoke() {
     // bodies — testnet payloads still include account-identifying
     // fields. Failure messages report only JSON shape (`shape_of`).
 }
+
+#[tokio::test]
+#[ignore = "live network"]
+async fn live_testnet_trading_smoke() {
+    // Trading smoke is opt-in via `DERIBIT_MCP_TRADING_SMOKE=1`,
+    // SEPARATE from the read-only `DERIBIT_MCP_SMOKE` flag — this
+    // places a real (deeply out-of-the-money, post-only) limit
+    // order on `test.deribit.com` and cancels it immediately.
+    if !matches!(env::var("DERIBIT_MCP_TRADING_SMOKE").as_deref(), Ok("1")) {
+        eprintln!("skipping: DERIBIT_MCP_TRADING_SMOKE != 1");
+        return;
+    }
+    let Some(client_id) = required_env("DERIBIT_CLIENT_ID") else {
+        eprintln!("skipping: DERIBIT_CLIENT_ID not set");
+        return;
+    };
+    let Some(client_secret) = required_env("DERIBIT_CLIENT_SECRET") else {
+        eprintln!("skipping: DERIBIT_CLIENT_SECRET not set");
+        return;
+    };
+
+    let cfg = Config {
+        endpoint: "https://test.deribit.com".to_string(),
+        client_id: Some(client_id),
+        client_secret: Some(client_secret),
+        // The point of the smoke test — exercise the real
+        // place_order + cancel_order round trip.
+        allow_trading: true,
+        // Smallest cap that still allows a 10-USD notional inverse
+        // perpetual order; keeps the safety net in place.
+        max_order_usd: Some(100),
+        transport: Transport::Stdio,
+        http_listen: "127.0.0.1:8723".parse().expect("default listen"),
+        http_bearer_token: None,
+        log_format: LogFormat::Text,
+    };
+    let ctx = Arc::new(AdapterContext::new(Arc::new(cfg)).expect("adapter context"));
+    let registry = ToolRegistry::build(&ctx);
+
+    // 1. Read the index price so we can pick a clearly out-of-the-money
+    //    limit price (no risk of execution).
+    let ticker = call_with_timeout(
+        &registry,
+        &ctx,
+        "get_ticker",
+        json!({"instrument_name": "BTC-PERPETUAL"}),
+    )
+    .await;
+    let mark_price = ticker
+        .get("mark_price")
+        .and_then(Value::as_f64)
+        .expect("ticker mark_price");
+    let safe_buy_price = (mark_price * 0.5).floor();
+
+    // 2. place_order — buy 10 USD notional at half-mark (post-only).
+    let placed = call_with_timeout(
+        &registry,
+        &ctx,
+        "place_order",
+        json!({
+            "instrument_name": "BTC-PERPETUAL",
+            "side": "buy",
+            "amount": 10.0,
+            "type": "limit",
+            "price": safe_buy_price,
+            "post_only": true,
+            "label": "deribit-mcp-smoke"
+        }),
+    )
+    .await;
+    let order_id = placed["order"]["order_id"]
+        .as_str()
+        .expect("order_id missing")
+        .to_string();
+
+    // 3. cancel_order — clean up.
+    let cancelled = call_with_timeout(
+        &registry,
+        &ctx,
+        "cancel_order",
+        json!({"order_id": order_id}),
+    )
+    .await;
+    assert_eq!(
+        cancelled.get("order_state").and_then(Value::as_str),
+        Some("cancelled"),
+        "cancel_order: not cancelled (shape: {})",
+        shape_of(&cancelled)
+    );
+}

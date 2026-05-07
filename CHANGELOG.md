@@ -9,6 +9,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Trading integration coverage + live smoke (v0.4-05):
+  - `From<HttpError> for AdapterError` now extracts the
+    `"API error: <code> - <message>"` payload that
+    `deribit-http` surfaces through `RequestFailed` and routes
+    it to `UpstreamErrorKind::Api { code: Some(<i64>), message }`
+    instead of an opaque `Http { message }`. The LLM now sees
+    the structured Deribit error code (e.g. `11044
+    not_open_order`) for failed trading calls.
+  - New integration scenarios in `tests/integration.rs`:
+    - `trading_tools_register_all_with_allow_trading` —
+      asserts every Trading tool is registered when
+      credentials and `--allow-trading` are configured.
+    - `cancel_order_upstream_order_not_found_maps_to_api_code_11044`
+      — asserts the new HttpError → Api { code } mapping.
+    - `cancel_all_by_currency_zero_count_returns_zero` — pins
+      the empty-result shape.
+  - `tests/sandbox_smoke.rs` extension `live_testnet_trading_smoke`
+    — opt-in via `DERIBIT_MCP_TRADING_SMOKE=1` (separate from
+    the read-only `DERIBIT_MCP_SMOKE`). Places a deeply OTM
+    post-only limit order on `BTC-PERPETUAL` against
+    `test.deribit.com`, then cancels it. `--max-order-usd=100`
+    safety net stays armed so a misconfigured run cannot place
+    a meaningful order.
+
 - `--max-order-usd` notional cap enforcement (v0.4-04):
   - `enforce_size_cap` runs in `place_order` after schema
     validation, before any private order-placement call. When
