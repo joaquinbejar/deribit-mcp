@@ -367,8 +367,8 @@ async fn handle_get_open_orders_by_currency(
 pub struct GetOpenOrdersByInstrumentInput {
     /// Instrument identifier (`BTC-PERPETUAL`, …).
     pub instrument_name: String,
-    /// Optional order-type filter; same vocabulary as
-    /// [`GetOpenOrdersByCurrencyInput::order_type`].
+    /// Optional order-type filter (same vocabulary as
+    /// `get_open_orders_by_currency`'s `type` argument).
     #[serde(default, rename = "type", skip_serializing_if = "Option::is_none")]
     pub order_type: Option<String>,
 }
@@ -461,37 +461,14 @@ async fn handle_get_user_trades_by_currency(
     input: Value,
 ) -> Result<Value, AdapterError> {
     let input: GetUserTradesByCurrencyInput = parse(input)?;
-    use deribit_http::model::{Currency, InstrumentKind, SortDirection};
 
-    let currency: Currency = serde_json::from_value(serde_json::Value::String(
-        input.currency.to_uppercase(),
-    ))
-    .map_err(|err| AdapterError::Validation {
-        field: "currency".to_string(),
-        message: err.to_string(),
-    })?;
+    if let Some(count) = input.count {
+        validate_count_range(count)?;
+    }
 
-    let kind = match input.kind.as_deref() {
-        None => None,
-        Some(s) => Some(
-            serde_json::from_value::<InstrumentKind>(serde_json::Value::String(s.to_lowercase()))
-                .map_err(|err| AdapterError::Validation {
-                field: "kind".to_string(),
-                message: err.to_string(),
-            })?,
-        ),
-    };
-
-    let sorting = match input.sorting.as_deref() {
-        None => None,
-        Some(s) => Some(
-            serde_json::from_value::<SortDirection>(serde_json::Value::String(s.to_lowercase()))
-                .map_err(|err| AdapterError::Validation {
-                    field: "sorting".to_string(),
-                    message: err.to_string(),
-                })?,
-        ),
-    };
+    let currency = parse_currency(&input.currency)?;
+    let kind = input.kind.as_deref().map(parse_kind).transpose()?;
+    let sorting = input.sorting.as_deref().map(parse_sorting).transpose()?;
 
     let request = deribit_http::model::request::trade::TradesRequest {
         currency,
@@ -507,6 +484,55 @@ async fn handle_get_user_trades_by_currency(
     };
     let result = ctx.http.get_user_trades_by_currency(request).await?;
     Ok(serde_json::to_value(&result)?)
+}
+
+/// Convert a user-supplied currency string into the upstream
+/// `Currency` closed-set enum.
+fn parse_currency(s: &str) -> Result<deribit_http::model::Currency, AdapterError> {
+    serde_json::from_value(serde_json::Value::String(s.to_uppercase())).map_err(|err| {
+        AdapterError::Validation {
+            field: "currency".to_string(),
+            message: err.to_string(),
+        }
+    })
+}
+
+/// Convert a user-supplied kind string into the upstream
+/// `InstrumentKind` enum.
+fn parse_kind(s: &str) -> Result<deribit_http::model::InstrumentKind, AdapterError> {
+    serde_json::from_value(serde_json::Value::String(s.to_lowercase())).map_err(|err| {
+        AdapterError::Validation {
+            field: "kind".to_string(),
+            message: err.to_string(),
+        }
+    })
+}
+
+/// Convert a user-supplied `sorting` string into the upstream
+/// `SortDirection` enum.
+fn parse_sorting(s: &str) -> Result<deribit_http::model::SortDirection, AdapterError> {
+    serde_json::from_value(serde_json::Value::String(s.to_lowercase())).map_err(|err| {
+        AdapterError::Validation {
+            field: "sorting".to_string(),
+            message: err.to_string(),
+        }
+    })
+}
+
+/// Reject `count` values outside the documented `1..=1000` range
+/// before the request hits the upstream HTTP client. The upstream
+/// would surface this as an opaque API error; rejecting here gives
+/// the LLM a structured `AdapterError::Validation { field: "count" }`
+/// instead.
+fn validate_count_range(count: u32) -> Result<(), AdapterError> {
+    if (1..=1000).contains(&count) {
+        Ok(())
+    } else {
+        Err(AdapterError::Validation {
+            field: "count".to_string(),
+            message: format!("expected 1..=1000, got {count}"),
+        })
+    }
 }
 
 // ----- get_user_trades_by_instrument --------------------------------
@@ -555,6 +581,9 @@ async fn handle_get_user_trades_by_instrument(
     input: Value,
 ) -> Result<Value, AdapterError> {
     let input: GetUserTradesByInstrumentInput = parse(input)?;
+    if let Some(count) = input.count {
+        validate_count_range(count)?;
+    }
     let result = ctx
         .http
         .get_user_trades_by_instrument(
@@ -674,5 +703,56 @@ mod tests {
         let parsed: GetSubaccountsInput =
             serde_json::from_value(serde_json::json!({})).expect("parse");
         assert!(parsed.with_portfolio.is_none());
+    }
+
+    #[test]
+    fn parse_currency_rejects_out_of_vocab() {
+        let err = parse_currency("DOGE").unwrap_err();
+        match err {
+            AdapterError::Validation { field, .. } => assert_eq!(field, "currency"),
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_kind_rejects_out_of_vocab() {
+        let err = parse_kind("perpetual").unwrap_err();
+        match err {
+            AdapterError::Validation { field, .. } => assert_eq!(field, "kind"),
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_sorting_rejects_out_of_vocab() {
+        let err = parse_sorting("random").unwrap_err();
+        match err {
+            AdapterError::Validation { field, .. } => assert_eq!(field, "sorting"),
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_currency_accepts_lowercase() {
+        let parsed = parse_currency("btc").expect("ok");
+        assert!(matches!(parsed, deribit_http::model::Currency::Btc));
+    }
+
+    #[test]
+    fn validate_count_rejects_zero_and_over_1000() {
+        assert!(matches!(
+            validate_count_range(0).unwrap_err(),
+            AdapterError::Validation { ref field, .. } if field == "count"
+        ));
+        assert!(matches!(
+            validate_count_range(1001).unwrap_err(),
+            AdapterError::Validation { ref field, .. } if field == "count"
+        ));
+    }
+
+    #[test]
+    fn validate_count_accepts_boundary_values() {
+        assert!(validate_count_range(1).is_ok());
+        assert!(validate_count_range(1000).is_ok());
     }
 }
