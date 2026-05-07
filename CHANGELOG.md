@@ -9,6 +9,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `place_order` Trading-class tool (v0.4-01):
+  - Buy / sell with the full Deribit order parameter surface
+    (`limit`, `market`, `stop_limit`, `stop_market`, `take_limit`,
+    `take_market`, `market_limit`; optional `time_in_force`,
+    `trigger`, `post_only`, `reject_post_only`, `reduce_only`,
+    `mmp`, `valid_until`, `label`).
+  - Adapter-side validation runs before the network call:
+    `amount` finite & `> 0`, `price` / `trigger_price` finite &
+    `> 0` when supplied, `price` required for limit / stop_limit
+    / take_limit, `trigger_price` + `trigger` required for stop /
+    take variants. Failures surface as
+    `AdapterError::Validation { field, message }`.
+  - Closed-set local enums (`Side`, `PlaceOrderType`,
+    `PlaceTimeInForce`, `PlaceTrigger`) with `snake_case` JSON
+    wire names — exhaustive match on dispatch / build, no
+    wildcard arms.
+  - `Side::Buy` → `deribit_http::buy_order`,
+    `Side::Sell` → `deribit_http::sell_order`. Effect class
+    `Trading`; registers only when `--allow-trading` is set
+    *and* credentials are configured (ADR-0010).
+  - Tool description tells the LLM the call places a real order
+    on the configured Deribit endpoint.
+  - New schema snapshot
+    `tests/snapshots/schema__trading_tool_input_schemas.snap`
+    pins the wire shape; integration tests in
+    `tests/integration.rs` cover the round-trip against
+    `mockito` and the validation-before-network path.
+
 - Reconnect / resume integration tests (`tests/integration_live.rs`)
   — v0.3-07:
   - `MockWsServer::subscribe_count()` /

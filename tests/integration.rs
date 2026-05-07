@@ -510,3 +510,127 @@ async fn resources_read_book_without_provider_returns_internal() {
         other => panic!("unexpected: {other:?}"),
     }
 }
+
+#[tokio::test]
+async fn place_order_tool_dispatches_through_registry() {
+    let mut server = mockito::Server::new_async().await;
+
+    let auth_body = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 0,
+        "result": {
+            "access_token": "test-access",
+            "expires_in": 900,
+            "refresh_token": "test-refresh",
+            "scope": "session:test",
+            "token_type": "Bearer"
+        }
+    });
+    server
+        .mock("GET", "/api/v2/public/auth")
+        .match_query(mockito::Matcher::Any)
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(auth_body.to_string())
+        .expect_at_least(1)
+        .create_async()
+        .await;
+
+    let buy_body = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 0,
+        "result": {
+            "order": {
+                "amount": 10.0,
+                "api": true,
+                "average_price": 0.0,
+                "creation_timestamp": 1_700_000_000_000_i64,
+                "direction": "buy",
+                "filled_amount": 0.0,
+                "instrument_name": "BTC-PERPETUAL",
+                "is_liquidation": false,
+                "is_rebalance": false,
+                "label": "",
+                "last_update_timestamp": 1_700_000_000_000_i64,
+                "max_show": 10.0,
+                "order_id": "ORDER-1",
+                "order_state": "open",
+                "order_type": "limit",
+                "post_only": false,
+                "price": 50_000.0,
+                "reduce_only": false,
+                "replaced": false,
+                "risk_reducing": false,
+                "time_in_force": "good_til_cancelled",
+                "web": false
+            },
+            "trades": []
+        }
+    });
+    let buy_mock = server
+        .mock("GET", "/api/v2/private/buy")
+        .match_query(mockito::Matcher::Any)
+        .match_header(
+            "authorization",
+            mockito::Matcher::Regex("^Bearer ".to_string()),
+        )
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(buy_body.to_string())
+        .expect(1)
+        .create_async()
+        .await;
+
+    let ctx = ctx_with_mock_creds(&server.url(), true, true);
+    let registry = ToolRegistry::build(&ctx);
+    assert!(
+        registry.contains("place_order"),
+        "place_order must register with creds + --allow-trading"
+    );
+
+    let out = registry
+        .call(
+            &ctx,
+            "place_order",
+            json!({
+                "instrument_name": "BTC-PERPETUAL",
+                "side": "buy",
+                "amount": 10.0,
+                "type": "limit",
+                "price": 50_000.0,
+            }),
+        )
+        .await
+        .expect("ok");
+
+    assert_eq!(
+        out["order"]["instrument_name"].as_str(),
+        Some("BTC-PERPETUAL")
+    );
+    assert_eq!(out["order"]["order_id"].as_str(), Some("ORDER-1"));
+    buy_mock.assert_async().await;
+}
+
+#[tokio::test]
+async fn place_order_invalid_input_rejected_before_network() {
+    let ctx = ctx_with_mock_creds("http://127.0.0.1:0/", true, true);
+    let registry = ToolRegistry::build(&ctx);
+
+    let err = registry
+        .call(
+            &ctx,
+            "place_order",
+            json!({
+                "instrument_name": "BTC-PERPETUAL",
+                "side": "buy",
+                "amount": 10.0,
+                "type": "limit"
+            }),
+        )
+        .await
+        .unwrap_err();
+    match err {
+        AdapterError::Validation { field, .. } => assert_eq!(field, "price"),
+        other => panic!("unexpected: {other:?}"),
+    }
+}
