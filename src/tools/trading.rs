@@ -151,9 +151,11 @@ pub struct PlaceOrderInput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mmp: Option<bool>,
     /// Server-side TTL (Unix-ms). After this timestamp the order is
-    /// auto-cancelled.
+    /// auto-cancelled. Unsigned to match the rest of the adapter's
+    /// timestamp inputs (`start_timestamp` / `end_timestamp` in the
+    /// Account family).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub valid_until: Option<i64>,
+    pub valid_until: Option<u64>,
 }
 
 fn place_order_tool() -> ToolEntry {
@@ -174,7 +176,7 @@ fn place_order_tool() -> ToolEntry {
 async fn handle_place_order(ctx: &AdapterContext, input: Value) -> Result<Value, AdapterError> {
     let input: PlaceOrderInput = parse(input)?;
     validate_place_order(&input)?;
-    let (side, request) = build_order_request(input);
+    let (side, request) = build_order_request(input)?;
     let result = match side {
         Side::Buy => ctx.http.buy_order(request).await?,
         Side::Sell => ctx.http.sell_order(request).await?,
@@ -254,9 +256,16 @@ fn validate_place_order(input: &PlaceOrderInput) -> Result<(), AdapterError> {
 /// Build the upstream `OrderRequest` plus the side-tag controlling
 /// which endpoint to hit. Closed-set matches on `PlaceOrderType` /
 /// `PlaceTimeInForce` / `PlaceTrigger` keep the conversion total.
+///
+/// # Errors
+///
+/// Returns [`AdapterError::Validation`] if `valid_until` overflows
+/// `i64` — practically unreachable for any real Unix-ms timestamp,
+/// but the upstream `OrderRequest.valid_until` is signed so the
+/// cast is checked here at the boundary instead of silently wrapping.
 fn build_order_request(
     input: PlaceOrderInput,
-) -> (Side, deribit_http::model::request::OrderRequest) {
+) -> Result<(Side, deribit_http::model::request::OrderRequest), AdapterError> {
     use deribit_http::model::order::OrderType as UpType;
     use deribit_http::model::request::OrderRequest;
     use deribit_http::model::trigger::Trigger as UpTrigger;
@@ -282,6 +291,13 @@ fn build_order_request(
         PlaceTrigger::MarkPrice => UpTrigger::MarkPrice,
         PlaceTrigger::LastPrice => UpTrigger::LastPrice,
     });
+    let valid_until = match input.valid_until {
+        None => None,
+        Some(v) => Some(i64::try_from(v).map_err(|_| AdapterError::Validation {
+            field: "valid_until".to_string(),
+            message: format!("must fit in i64, got {v}"),
+        })?),
+    };
     let req = OrderRequest {
         order_id: None,
         instrument_name: input.instrument_name,
@@ -300,12 +316,12 @@ fn build_order_request(
         trigger,
         advanced: None,
         mmp: input.mmp,
-        valid_until: input.valid_until,
+        valid_until,
         linked_order_type: None,
         trigger_fill_condition: None,
         otoco_config: None,
     };
-    (input.side, req)
+    Ok((input.side, req))
 }
 
 #[cfg(test)]
@@ -403,10 +419,20 @@ mod tests {
     #[test]
     fn build_request_round_trips_buy_side() {
         let input = limit_input();
-        let (side, req) = build_order_request(input);
+        let (side, req) = build_order_request(input).unwrap();
         assert_eq!(side, Side::Buy);
         assert_eq!(req.instrument_name, "BTC-PERPETUAL");
         assert_eq!(req.amount, Some(10.0));
         assert_eq!(req.price, Some(50_000.0));
+    }
+
+    #[test]
+    fn valid_until_overflow_rejected() {
+        let mut input = limit_input();
+        input.valid_until = Some(u64::MAX);
+        let err = build_order_request(input).unwrap_err();
+        assert!(
+            matches!(err, AdapterError::Validation { ref field, .. } if field == "valid_until")
+        );
     }
 }
