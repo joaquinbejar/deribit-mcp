@@ -72,7 +72,7 @@ expression: schemas
         description: "Instrument identifier (`BTC-PERPETUAL`, …)."
         type: string
       type:
-        description: "Optional order-type filter; same vocabulary as\n[`GetOpenOrdersByCurrencyInput::order_type`]."
+        description: "Optional order-type filter (same vocabulary as\n`get_open_orders_by_currency`'s `type` argument)."
         type:
           - string
           - "null"
