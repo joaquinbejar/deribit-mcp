@@ -4,7 +4,8 @@
 //!
 //! - [`public`] — `Read` tools with no auth requirement.
 //! - [`account`] — `Account` tools that require credentials.
-//! - [`trading`] — `Trading` tools gated by `--allow-trading`.
+//! - [`trading`] — `Trading` tools that require credentials **and**
+//!   `--allow-trading`.
 //!
 //! The registry is built once at startup from the configured class set
 //! and frozen for the lifetime of the process. A tool absent from the
@@ -77,15 +78,19 @@ pub type ToolHandlerFn =
     Arc<dyn for<'a> Fn(&'a AdapterContext, Value) -> ToolFuture<'a> + Send + Sync + 'static>;
 
 /// One registered tool: its MCP descriptor, effect class, and handler.
+///
+/// Fields are `pub(crate)` so external callers cannot bypass
+/// [`ToolRegistry::call`]'s class gate by invoking the handler
+/// directly.
 #[derive(Clone)]
 pub struct ToolEntry {
     /// MCP `Tool` descriptor (name, description, schemas) returned by
     /// `tools/list`.
-    pub descriptor: Tool,
+    pub(crate) descriptor: Tool,
     /// Effect class. Re-checked at dispatch time.
-    pub class: ToolClass,
+    pub(crate) class: ToolClass,
     /// Async handler invoked by `tools/call`.
-    pub handler: ToolHandlerFn,
+    pub(crate) handler: ToolHandlerFn,
 }
 
 impl std::fmt::Debug for ToolEntry {
@@ -142,7 +147,18 @@ impl ToolRegistry {
 
     /// Insert a tool. Returns the previous entry under the same name,
     /// if any (caller treats that as a programmer error).
-    pub fn insert(&mut self, entry: ToolEntry) -> Option<ToolEntry> {
+    ///
+    /// `pub(crate)` because the registry's invariant is *frozen for
+    /// the lifetime of the process after [`Self::build`]*. The only
+    /// callers are the per-family `register()` hooks invoked from
+    /// [`Self::build`]. External callers go through `build` so the
+    /// class gating is always applied.
+    ///
+    /// `allow(dead_code)` because the per-family `register()` hooks
+    /// are empty in v0.1-06 — they fill in over v0.1-10 (`Read`),
+    /// v0.2 (`Account`), and v0.4 (`Trading`).
+    #[allow(dead_code)]
+    pub(crate) fn insert(&mut self, entry: ToolEntry) -> Option<ToolEntry> {
         let name = entry.descriptor.name.to_string();
         self.entries.insert(name, entry)
     }
@@ -216,6 +232,10 @@ impl ToolRegistry {
 /// Defence-in-depth gate: even if a tool of a higher-effect class
 /// somehow lands in the registry, dispatch refuses to invoke it
 /// without the matching configuration.
+///
+/// The `flag` returned in [`AdapterError::NotEnabled`] reflects which
+/// precondition is actually missing — credentials, the trading flag,
+/// or both — so the LLM client gets actionable feedback.
 #[inline(never)]
 fn check_class_enabled(
     class: ToolClass,
@@ -235,14 +255,21 @@ fn check_class_enabled(
             }
         }
         ToolClass::Trading => {
-            if ctx.has_credentials() && ctx.config.allow_trading {
-                Ok(())
-            } else {
-                Err(AdapterError::NotEnabled {
-                    tool: name.to_string(),
-                    flag: ToolClass::Trading.flag().to_string(),
-                })
+            let creds = ctx.has_credentials();
+            let trading = ctx.config.allow_trading;
+            if creds && trading {
+                return Ok(());
             }
+            let flag = match (creds, trading) {
+                (false, false) => "DERIBIT_CLIENT_ID + DERIBIT_CLIENT_SECRET + --allow-trading",
+                (false, true) => ToolClass::Account.flag(),
+                (true, false) => "--allow-trading",
+                (true, true) => unreachable!("returned Ok above"),
+            };
+            Err(AdapterError::NotEnabled {
+                tool: name.to_string(),
+                flag: flag.to_string(),
+            })
         }
     }
 }
