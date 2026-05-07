@@ -39,12 +39,19 @@ fn cfg(endpoint: &str, with_creds: bool, allow_trading: bool) -> Config {
 }
 
 /// Build an `AdapterContext` whose upstream HTTP client points at
-/// the given `mockito` server URL. The `deribit-http` client builds
-/// each request URL as `{base_url}{endpoint}{query}` (no path-join
-/// normalisation), so we suffix the mock root with `/api/v2` —
-/// matching the upstream constants — and mockito matches against
-/// `/api/v2/public/...` directly.
-fn ctx_with_mock(server_url: &str) -> Arc<AdapterContext> {
+/// the given `mockito` server URL with the given gating flags. The
+/// `deribit-http` client builds each request URL as
+/// `{base_url}{endpoint}{query}` (no path-join normalisation), so we
+/// suffix the mock root with `/api/v2` — matching the upstream
+/// constants — and mockito matches against `/api/v2/public/...`
+/// directly. We trim a trailing slash from `server_url` to avoid a
+/// `//api/v2` double-slash when callers pass a normalised URL.
+fn ctx_with_mock_creds(
+    server_url: &str,
+    with_creds: bool,
+    allow_trading: bool,
+) -> Arc<AdapterContext> {
+    let server_url = server_url.trim_end_matches('/');
     let with_prefix = format!("{server_url}/api/v2");
     let parsed = Url::parse(&with_prefix).expect("mock URL");
     let mut http_cfg = HttpConfig::testnet();
@@ -54,19 +61,28 @@ fn ctx_with_mock(server_url: &str) -> Arc<AdapterContext> {
     let http = DeribitHttpClient::with_config(http_cfg);
 
     // Build a normal context, then swap in the http client.
-    let cfg = Arc::new(cfg(&with_prefix, false, false));
+    let cfg = Arc::new(cfg(&with_prefix, with_creds, allow_trading));
     let mut ctx = AdapterContext::new(cfg).expect("ctx");
     ctx.http = http;
     Arc::new(ctx)
+}
+
+/// Anonymous-context shorthand.
+fn ctx_with_mock(server_url: &str) -> Arc<AdapterContext> {
+    ctx_with_mock_creds(server_url, false, false)
 }
 
 #[tokio::test]
 async fn tools_list_without_creds_includes_only_read_class() {
     let ctx = ctx_with_mock("http://127.0.0.1:0/");
     // We don't need the mock for this scenario; just exercise the
-    // registry + class gating that drives `tools/list`.
+    // registry + class gating that drives `tools/list`. Asserting
+    // on a specific tool count would couple the test to whichever
+    // milestone added the most-recent tool — instead, assert every
+    // registered tool is `Read` and the well-known v0.1 names show
+    // up.
     let registry = ToolRegistry::build(&ctx);
-    assert_eq!(registry.len(), 14);
+    assert!(!registry.is_empty(), "Read tools register without creds");
     for tool in registry.list() {
         let entry = registry.get(tool.name.as_ref()).expect("entry");
         assert_eq!(
@@ -74,6 +90,12 @@ async fn tools_list_without_creds_includes_only_read_class() {
             deribit_mcp::tools::ToolClass::Read,
             "{}",
             tool.name
+        );
+    }
+    for expected in ["get_ticker", "get_currencies", "get_order_book"] {
+        assert!(
+            registry.contains(expected),
+            "expected `{expected}` in tool list"
         );
     }
 }
@@ -124,12 +146,17 @@ async fn tools_call_get_ticker_returns_upstream_payload() {
         .expect("ok");
 
     // The handler returns the upstream JSON verbatim (the
-    // `TickerData` struct serialised). Just assert one stable field
-    // to avoid coupling to the exact upstream serde shape.
-    assert!(
-        out.get("instrument_name").and_then(Value::as_str) == Some("BTC-PERPETUAL")
-            || out.get("mark_price").is_some(),
-        "expected ticker fields in payload, got {out}"
+    // `TickerData` struct serialised). Tighten the assertion to a
+    // specific value so a wrong-instrument response can't pass.
+    assert_eq!(
+        out.get("instrument_name").and_then(Value::as_str),
+        Some("BTC-PERPETUAL"),
+        "expected instrument_name in payload, got {out}"
+    );
+    assert_eq!(
+        out.get("mark_price").and_then(Value::as_f64),
+        Some(50_000.5),
+        "expected mark_price in payload, got {out}"
     );
 }
 
@@ -149,14 +176,19 @@ async fn tools_call_unknown_returns_validation() {
 
 #[tokio::test]
 async fn tools_call_trading_without_allow_trading_returns_not_enabled() {
-    let ctx = ctx_with_mock("http://127.0.0.1:0/");
+    // Credentials present, `--allow-trading` NOT set: this is the
+    // exact scenario ADR-0010 gates. The Trading family is omitted
+    // from the registry, so `place_order` is absent and dispatch
+    // returns `Validation { field: "name" }` (the user-facing "tool
+    // not registered" path). The defence-in-depth `NotEnabled` path
+    // is exercised by the unit tests in `src/tools/mod.rs` — the
+    // integration test guards the *absence-from-registry* branch.
+    let ctx = ctx_with_mock_creds("http://127.0.0.1:0/", true, false);
     let registry = ToolRegistry::build(&ctx);
-    // `place_order` (Trading) is not registered without the flag,
-    // so dispatch returns `Validation { field: "name" }` — which is
-    // the user-facing equivalent of "method not found" at the MCP
-    // layer (rmcp converts it). This guards the absence-from-registry
-    // path; the defence-in-depth `NotEnabled` path is covered by
-    // unit tests in `src/tools/mod.rs`.
+    assert!(
+        !registry.contains("place_order"),
+        "Trading tools must NOT register without --allow-trading"
+    );
     let err = registry
         .call(&ctx, "place_order", json!({}))
         .await
