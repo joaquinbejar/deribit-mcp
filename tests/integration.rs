@@ -634,3 +634,178 @@ async fn place_order_invalid_input_rejected_before_network() {
         other => panic!("unexpected: {other:?}"),
     }
 }
+
+#[tokio::test]
+async fn edit_order_tool_dispatches_through_registry() {
+    let mut server = mockito::Server::new_async().await;
+    let auth_body = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 0,
+        "result": {
+            "access_token": "test-access",
+            "expires_in": 900,
+            "refresh_token": "test-refresh",
+            "scope": "session:test",
+            "token_type": "Bearer"
+        }
+    });
+    server
+        .mock("GET", "/api/v2/public/auth")
+        .match_query(mockito::Matcher::Any)
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(auth_body.to_string())
+        .expect_at_least(1)
+        .create_async()
+        .await;
+
+    let edit_body = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 0,
+        "result": {
+            "order": {
+                "amount": 20.0,
+                "api": true,
+                "average_price": 0.0,
+                "creation_timestamp": 1_700_000_000_000_i64,
+                "direction": "buy",
+                "filled_amount": 0.0,
+                "instrument_name": "BTC-PERPETUAL",
+                "is_liquidation": false,
+                "is_rebalance": false,
+                "label": "",
+                "last_update_timestamp": 1_700_000_000_001_i64,
+                "max_show": 20.0,
+                "order_id": "ORDER-1",
+                "order_state": "open",
+                "order_type": "limit",
+                "post_only": false,
+                "price": 51_000.0,
+                "reduce_only": false,
+                "replaced": true,
+                "risk_reducing": false,
+                "time_in_force": "good_til_cancelled",
+                "web": false
+            },
+            "trades": []
+        }
+    });
+    let edit_mock = server
+        .mock("GET", "/api/v2/private/edit")
+        .match_query(mockito::Matcher::Any)
+        .match_header(
+            "authorization",
+            mockito::Matcher::Regex("^Bearer ".to_string()),
+        )
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(edit_body.to_string())
+        .expect(1)
+        .create_async()
+        .await;
+
+    let ctx = ctx_with_mock_creds(&server.url(), true, true);
+    let registry = ToolRegistry::build(&ctx);
+    let out = registry
+        .call(
+            &ctx,
+            "edit_order",
+            json!({"order_id": "ORDER-1", "amount": 20.0, "price": 51_000.0}),
+        )
+        .await
+        .expect("ok");
+    assert_eq!(out["order"]["price"].as_f64(), Some(51_000.0));
+    assert_eq!(out["order"]["amount"].as_f64(), Some(20.0));
+    edit_mock.assert_async().await;
+}
+
+#[tokio::test]
+async fn cancel_order_tool_dispatches_through_registry() {
+    let mut server = mockito::Server::new_async().await;
+    let auth_body = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 0,
+        "result": {
+            "access_token": "test-access",
+            "expires_in": 900,
+            "refresh_token": "test-refresh",
+            "scope": "session:test",
+            "token_type": "Bearer"
+        }
+    });
+    server
+        .mock("GET", "/api/v2/public/auth")
+        .match_query(mockito::Matcher::Any)
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(auth_body.to_string())
+        .expect_at_least(1)
+        .create_async()
+        .await;
+
+    let cancel_body = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 0,
+        "result": {
+            "amount": 10.0,
+            "api": true,
+            "average_price": 0.0,
+            "creation_timestamp": 1_700_000_000_000_i64,
+            "direction": "buy",
+            "filled_amount": 0.0,
+            "instrument_name": "BTC-PERPETUAL",
+            "is_liquidation": false,
+            "is_rebalance": false,
+            "label": "",
+            "last_update_timestamp": 1_700_000_000_002_i64,
+            "max_show": 10.0,
+            "order_id": "ORDER-1",
+            "order_state": "cancelled",
+            "order_type": "limit",
+            "post_only": false,
+            "price": 50_000.0,
+            "reduce_only": false,
+            "replaced": false,
+            "risk_reducing": false,
+            "time_in_force": "good_til_cancelled",
+            "web": false
+        }
+    });
+    let cancel_mock = server
+        .mock("GET", "/api/v2/private/cancel")
+        .match_query(mockito::Matcher::Any)
+        .match_header(
+            "authorization",
+            mockito::Matcher::Regex("^Bearer ".to_string()),
+        )
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(cancel_body.to_string())
+        .expect(1)
+        .create_async()
+        .await;
+
+    let ctx = ctx_with_mock_creds(&server.url(), true, true);
+    let registry = ToolRegistry::build(&ctx);
+    let out = registry
+        .call(&ctx, "cancel_order", json!({"order_id": "ORDER-1"}))
+        .await
+        .expect("ok");
+    assert_eq!(out["order_state"].as_str(), Some("cancelled"));
+    assert_eq!(out["order_id"].as_str(), Some("ORDER-1"));
+    cancel_mock.assert_async().await;
+}
+
+#[tokio::test]
+async fn cancel_order_empty_id_rejected() {
+    let ctx = ctx_with_mock_creds("http://127.0.0.1:0/", true, true);
+    let registry = ToolRegistry::build(&ctx);
+    let err = registry
+        .call(&ctx, "cancel_order", json!({"order_id": "  "}))
+        .await
+        .unwrap_err();
+    match err {
+        AdapterError::Validation { field, .. } => assert_eq!(field, "order_id"),
+        other => panic!("unexpected: {other:?}"),
+    }
+}
