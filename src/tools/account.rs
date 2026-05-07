@@ -13,6 +13,12 @@
 //!   / kind / subaccount.
 //! - `get_subaccounts` — subaccount list with optional portfolio.
 //!
+//! v0.2-03 adds historical-activity tools:
+//!
+//! - `get_transaction_log` — account transaction log for a window.
+//! - `get_deposits` — recent deposits for a currency.
+//! - `get_withdrawals` — recent withdrawals for a currency.
+//!
 //! [`ToolClass::Account`]: super::ToolClass::Account
 
 use std::sync::Arc;
@@ -32,6 +38,10 @@ pub fn register(registry: &mut ToolRegistry) {
     registry.insert(get_account_summary_tool());
     registry.insert(get_positions_tool());
     registry.insert(get_subaccounts_tool());
+    // v0.2-03 — historical activity.
+    registry.insert(get_transaction_log_tool());
+    registry.insert(get_deposits_tool());
+    registry.insert(get_withdrawals_tool());
 }
 
 // ----- get_account_summary ------------------------------------------
@@ -157,6 +167,133 @@ async fn handle_get_subaccounts(ctx: &AdapterContext, input: Value) -> Result<Va
     Ok(serde_json::to_value(&result)?)
 }
 
+// ----- get_transaction_log ------------------------------------------
+
+/// `get_transaction_log` input.
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub struct GetTransactionLogInput {
+    /// Currency to scope the log to (`BTC`, `ETH`, …).
+    pub currency: String,
+    /// Window start, Unix epoch milliseconds.
+    pub start_timestamp: u64,
+    /// Window end, Unix epoch milliseconds.
+    pub end_timestamp: u64,
+    /// Optional substring search across the log entries.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub query: Option<String>,
+    /// Maximum entries to return (upstream caps the page size).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub count: Option<u64>,
+    /// Optional subaccount id to scope the log to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subaccount_id: Option<u64>,
+    /// Continuation token from a previous page (returned in
+    /// upstream `continuation` field).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub continuation: Option<u64>,
+}
+
+fn get_transaction_log_tool() -> ToolEntry {
+    let schema = schema_for::<GetTransactionLogInput>();
+    let descriptor = Tool::new(
+        "get_transaction_log",
+        "Account transaction log for a currency over a window, with optional pagination.",
+        schema,
+    );
+    let handler: ToolHandlerFn =
+        Arc::new(|ctx, input| Box::pin(handle_get_transaction_log(ctx, input)));
+    ToolEntry {
+        descriptor,
+        class: ToolClass::Account,
+        handler,
+    }
+}
+
+async fn handle_get_transaction_log(
+    ctx: &AdapterContext,
+    input: Value,
+) -> Result<Value, AdapterError> {
+    let input: GetTransactionLogInput = parse(input)?;
+    let request = deribit_http::model::transaction::TransactionLogRequest {
+        currency: input.currency,
+        start_timestamp: input.start_timestamp,
+        end_timestamp: input.end_timestamp,
+        query: input.query,
+        count: input.count,
+        subaccount_id: input.subaccount_id,
+        continuation: input.continuation,
+    };
+    let result = ctx.http.get_transaction_log(request).await?;
+    Ok(serde_json::to_value(&result)?)
+}
+
+// ----- get_deposits / get_withdrawals -------------------------------
+
+/// Pagination + currency input shared by `get_deposits` and
+/// `get_withdrawals` (the upstream signatures are identical).
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub struct PaginatedCurrencyInput {
+    /// Currency to scope the query to (`BTC`, `ETH`, …).
+    pub currency: String,
+    /// Page size; defaults to upstream's default (10) when omitted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub count: Option<u32>,
+    /// Page offset; defaults to 0 when omitted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offset: Option<u32>,
+}
+
+fn get_deposits_tool() -> ToolEntry {
+    let schema = schema_for::<PaginatedCurrencyInput>();
+    let descriptor = Tool::new(
+        "get_deposits",
+        "Recent deposits for a currency, paginated.",
+        schema,
+    );
+    let handler: ToolHandlerFn = Arc::new(|ctx, input| Box::pin(handle_get_deposits(ctx, input)));
+    ToolEntry {
+        descriptor,
+        class: ToolClass::Account,
+        handler,
+    }
+}
+
+async fn handle_get_deposits(ctx: &AdapterContext, input: Value) -> Result<Value, AdapterError> {
+    let input: PaginatedCurrencyInput = parse(input)?;
+    let result = ctx
+        .http
+        .get_deposits(&input.currency, input.count, input.offset)
+        .await?;
+    Ok(serde_json::to_value(&result)?)
+}
+
+fn get_withdrawals_tool() -> ToolEntry {
+    let schema = schema_for::<PaginatedCurrencyInput>();
+    let descriptor = Tool::new(
+        "get_withdrawals",
+        "Recent withdrawals for a currency, paginated.",
+        schema,
+    );
+    let handler: ToolHandlerFn =
+        Arc::new(|ctx, input| Box::pin(handle_get_withdrawals(ctx, input)));
+    ToolEntry {
+        descriptor,
+        class: ToolClass::Account,
+        handler,
+    }
+}
+
+async fn handle_get_withdrawals(ctx: &AdapterContext, input: Value) -> Result<Value, AdapterError> {
+    let input: PaginatedCurrencyInput = parse(input)?;
+    let result = ctx
+        .http
+        .get_withdrawals(&input.currency, input.count, input.offset)
+        .await?;
+    Ok(serde_json::to_value(&result)?)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -167,24 +304,49 @@ mod tests {
             get_account_summary_tool(),
             get_positions_tool(),
             get_subaccounts_tool(),
+            get_transaction_log_tool(),
+            get_deposits_tool(),
+            get_withdrawals_tool(),
         ] {
             assert_eq!(entry.class, ToolClass::Account);
         }
     }
 
     #[test]
-    fn register_populates_three_tools() {
+    fn register_populates_full_account_set() {
         let mut registry = ToolRegistry::new();
         register(&mut registry);
         let listed = registry.list();
         let names: Vec<&str> = listed.iter().map(|t| t.name.as_ref()).collect();
-        for expected in ["get_account_summary", "get_positions", "get_subaccounts"] {
+        for expected in [
+            "get_account_summary",
+            "get_deposits",
+            "get_positions",
+            "get_subaccounts",
+            "get_transaction_log",
+            "get_withdrawals",
+        ] {
             assert!(
                 names.contains(&expected),
                 "missing tool {expected}; got {names:?}"
             );
         }
-        assert_eq!(registry.len(), 3);
+        assert_eq!(registry.len(), 6);
+    }
+
+    #[test]
+    fn transaction_log_input_requires_window() {
+        let err =
+            parse::<GetTransactionLogInput>(serde_json::json!({"currency": "BTC"})).unwrap_err();
+        assert!(matches!(err, AdapterError::Validation { .. }));
+    }
+
+    #[test]
+    fn paginated_input_accepts_required_only() {
+        let parsed: PaginatedCurrencyInput =
+            serde_json::from_value(serde_json::json!({"currency": "BTC"})).expect("parse");
+        assert!(parsed.count.is_none());
+        assert!(parsed.offset.is_none());
     }
 
     #[test]
