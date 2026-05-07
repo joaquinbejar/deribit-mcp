@@ -128,10 +128,14 @@ fn http_config_from(config: &Config) -> Result<HttpConfig, AdapterError> {
     };
     cfg.base_url = parsed;
     cfg.testnet = testnet;
-    cfg.credentials = match (config.client_id.clone(), config.client_secret.clone()) {
+    // Match on references first so we never clone the secret on the
+    // partial-credential branch (where the clone would be discarded
+    // and only inflate the number of in-memory copies of the secret
+    // for `tracing`/heap dumps to potentially observe).
+    cfg.credentials = match (config.client_id.as_ref(), config.client_secret.as_ref()) {
         (Some(client_id), Some(client_secret)) => Some(ApiCredentials {
-            client_id: Some(client_id),
-            client_secret: Some(client_secret),
+            client_id: Some(client_id.clone()),
+            client_secret: Some(client_secret.clone()),
         }),
         _ => None,
     };
