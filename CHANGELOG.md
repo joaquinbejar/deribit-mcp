@@ -9,6 +9,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Live resource — `deribit://book/{instrument}` (v0.3-02):
+  - `BookSnapshot` DTO (`instrument`, `bids`, `asks`, `change_id`,
+    `timestamp`) with permissive
+    `BookSnapshot::from_value(instrument, raw)` decoder. Handles
+    `[op, price, size]` (delta) and `[price, size]` (snapshot)
+    upstream level shapes; missing optional fields default rather
+    than failing the call.
+  - `ResourceRegistry::with_subscription_provider(provider)` injects
+    a `SubscriptionProvider` (real wiring lands when the binary
+    startup hooks `deribit-websocket`; tests pass a stub).
+  - `ResourceRegistry::read` for `Book` subscribes via the
+    [`LiveRegistry`], waits up to `FIRST_FRAME_TIMEOUT` (5 s) for
+    the first frame, decodes into a `BookSnapshot`, and returns
+    `ResourceContent::Json`. Without a provider it returns
+    `AdapterError::Internal { reason: "live subscription provider
+    not configured" }`.
+  - `channel_name_for(Book)` switched from the speculative
+    `100ms` aggregation to the documented `book.<i>.raw` channel
+    per the v0.3-02 spec.
+  - Live-template descriptions updated to spell out the new
+    behaviour.
 - Live resource registry + lifecycle (`src/resources/live.rs`):
   - `LiveRegistry` keys per `ResourceUri`. First subscriber opens
     the upstream channel via the new `SubscriptionProvider`

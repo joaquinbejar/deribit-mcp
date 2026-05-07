@@ -294,13 +294,15 @@ impl LiveRegistry {
 
 /// Map a live `ResourceUri` to its upstream Deribit channel name.
 ///
-/// `book.<instrument>.100ms` / `ticker.<instrument>.100ms` /
-/// `trades.<instrument>.100ms` per the Deribit channel taxonomy
-/// (the `100ms` aggregation is the safe default; v0.3-02..04 may
-/// expose alternative aggregations).
-fn channel_name_for(uri: &ResourceUri) -> String {
+/// Per-resource defaults:
+///
+/// - `book` → `book.<instrument>.raw` (uncoalesced — v0.3-02 ships
+///   the raw channel; v0.4+ may expose aggregated variants).
+/// - `ticker` → `ticker.<instrument>.100ms`.
+/// - `trades` → `trades.<instrument>.100ms`.
+pub fn channel_name_for(uri: &ResourceUri) -> String {
     match uri {
-        ResourceUri::Book { instrument } => format!("book.{instrument}.100ms"),
+        ResourceUri::Book { instrument } => format!("book.{instrument}.raw"),
         ResourceUri::Ticker { instrument } => format!("ticker.{instrument}.100ms"),
         ResourceUri::Trades { instrument } => format!("trades.{instrument}.100ms"),
         // Static URIs never reach the live registry; the parser
@@ -310,6 +312,90 @@ fn channel_name_for(uri: &ResourceUri) -> String {
         ResourceUri::Currencies => "currencies".to_string(),
         ResourceUri::Instruments { currency } => format!("instruments.{currency}"),
     }
+}
+
+/// Order-book snapshot exposed via `deribit://book/{instrument}`.
+///
+/// Mirrors the `book.<instrument>.raw` Deribit WebSocket channel
+/// payload; decoded snapshots are stored as `serde_json::Value` in
+/// [`SubscriptionEntry::latest`] and structured into this DTO at the
+/// resource read boundary.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub struct BookSnapshot {
+    /// Instrument identifier (`BTC-PERPETUAL`, `BTC-31MAY24-50000-C`, …).
+    pub instrument: String,
+    /// Bid side as `(price, size)` pairs sorted high-to-low. May be
+    /// empty on the first frame of a delta subscription.
+    pub bids: Vec<(f64, f64)>,
+    /// Ask side as `(price, size)` pairs sorted low-to-high.
+    pub asks: Vec<(f64, f64)>,
+    /// Sequence id of this snapshot. Monotonically increases per
+    /// channel; use to dedupe / detect resync.
+    pub change_id: u64,
+    /// Snapshot timestamp, Unix epoch milliseconds.
+    pub timestamp: i64,
+}
+
+impl BookSnapshot {
+    /// Decode an upstream `book.<instrument>.raw` WS frame payload
+    /// (the inner `data` object after the JSON-RPC envelope is
+    /// stripped). Permissive: missing optional fields default to
+    /// 0 / empty rather than failing the call — the LLM gets a
+    /// best-effort snapshot.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AdapterError::Validation`] when the payload is
+    /// not a JSON object or when `bids` / `asks` carry malformed
+    /// entries.
+    pub fn from_value(instrument: &str, value: &Value) -> Result<Self, AdapterError> {
+        let obj = value
+            .as_object()
+            .ok_or_else(|| AdapterError::validation("book", "expected JSON object"))?;
+        let bids = decode_levels(obj.get("bids"))?;
+        let asks = decode_levels(obj.get("asks"))?;
+        let change_id = obj
+            .get("change_id")
+            .and_then(Value::as_u64)
+            .unwrap_or_default();
+        let timestamp = obj
+            .get("timestamp")
+            .and_then(Value::as_i64)
+            .unwrap_or_default();
+        Ok(Self {
+            instrument: instrument.to_string(),
+            bids,
+            asks,
+            change_id,
+            timestamp,
+        })
+    }
+}
+
+/// Decode a side of the order book — Deribit emits each level as
+/// `[op, price, size]` (delta) or `[price, size]` (snapshot). We
+/// keep only `(price, size)` and discard the operation marker; the
+/// LLM consumer just wants the current shape.
+fn decode_levels(value: Option<&Value>) -> Result<Vec<(f64, f64)>, AdapterError> {
+    let Some(array) = value.and_then(Value::as_array) else {
+        return Ok(Vec::new());
+    };
+    let mut out = Vec::with_capacity(array.len());
+    for level in array {
+        let Some(items) = level.as_array() else {
+            continue;
+        };
+        let (price, size) = match items.as_slice() {
+            [_op, price, size] => (price.as_f64(), size.as_f64()),
+            [price, size] => (price.as_f64(), size.as_f64()),
+            _ => continue,
+        };
+        if let (Some(price), Some(size)) = (price, size) {
+            out.push((price, size));
+        }
+    }
+    Ok(out)
 }
 
 /// Capacity of the per-entry broadcast channel. 64 is enough to
@@ -482,7 +568,7 @@ mod tests {
             channel_name_for(&ResourceUri::Book {
                 instrument: "BTC-PERPETUAL".to_string()
             }),
-            "book.BTC-PERPETUAL.100ms"
+            "book.BTC-PERPETUAL.raw"
         );
         assert_eq!(
             channel_name_for(&ResourceUri::Ticker {

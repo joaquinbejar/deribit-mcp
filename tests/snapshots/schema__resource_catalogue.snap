@@ -8,19 +8,19 @@ resources:
     name: Deribit currency catalogue
     uri: "deribit://currencies"
 templates:
-  - description: "Live order book for an instrument. Read returns AdapterError::Internal { reason: \"live resources land in v0.3\" } until v0.3 wires the WebSocket transport."
+  - description: "Order book snapshots from the `book.<instrument>.raw` channel. Read returns the latest decoded BookSnapshot when a SubscriptionProvider is configured; otherwise AdapterError::Internal."
     mimeType: application/json
-    name: "Deribit order book (live, v0.3+)"
+    name: Deribit order book (live)
     uriTemplate: "deribit://book/{instrument}"
   - description: Static list of instruments for a given currency.
     mimeType: application/json
     name: Deribit instruments by currency
     uriTemplate: "deribit://instruments/{currency}"
-  - description: "Live ticker for an instrument. Read returns AdapterError::Internal { reason: \"live resources land in v0.3\" } until v0.3 wires the WebSocket transport."
+  - description: "Live ticker for an instrument. Wired in v0.3-03; current read returns AdapterError::Internal."
     mimeType: application/json
-    name: "Deribit ticker (live, v0.3+)"
+    name: "Deribit ticker (live, v0.3-03+)"
     uriTemplate: "deribit://ticker/{instrument}"
-  - description: "Live trades for an instrument. Read returns AdapterError::Internal { reason: \"live resources land in v0.3\" } until v0.3 wires the WebSocket transport."
+  - description: "Live trades for an instrument. Wired in v0.3-04; current read returns AdapterError::Internal."
     mimeType: application/json
-    name: "Deribit last trades (live, v0.3+)"
+    name: "Deribit last trades (live, v0.3-04+)"
     uriTemplate: "deribit://trades/{instrument}"
