@@ -142,6 +142,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the server over a pair of `tokio::io::duplex` pipes, sends one
   `initialize` request, asserts the response shape (protocol version,
   serverInfo, capabilities), and verifies graceful EOF shutdown.
+- HTTP / Streamable-HTTP transport (`src/http_transport.rs`):
+  - axum router fronts `rmcp::transport::streamable_http_server::StreamableHttpService`
+    at `/mcp` and exposes `GET /healthz` (always unauthenticated).
+  - Optional static bearer-token auth read only from
+    `DERIBIT_HTTP_BEARER_TOKEN` (env / `.env`, no CLI flag, per
+    ADR-0004): every `/mcp` request must carry
+    `Authorization: Bearer <token>`; mismatches return `401` with a
+    `WWW-Authenticate: Bearer` hint. Comparison is constant-time.
+  - The middleware is layered on the `/mcp` sub-router only, so
+    unknown paths surface a natural 404 and `/healthz` stays
+    unauthenticated by construction.
+  - Loopback-only host allow-list by default; reverse proxies pre-bind
+    a public hostname.
+  - Graceful shutdown via a `tokio_util::sync::CancellationToken`
+    propagated to both axum and rmcp.
+- `src/main.rs` `--transport=http` branch: builds `AdapterContext`,
+  spawns a SIGINT handler that cancels the token, and serves the HTTP
+  router. INFO banner mirrors the stdio path: env, endpoint, listen
+  addr, bearer status (`set` / `none`).
+- New direct dependencies: `axum = "0.8"`, `tower = "0.5"`,
+  `hyper = "1"` (server + http1 features), `hyper-util = "0.1"`,
+  `tokio-util = "0.7"` (rt feature for `CancellationToken`).
+- `tests/http_transport.rs`: spins the HTTP server on a random
+  loopback port and asserts:
+  - `GET /healthz` returns 200 even when a bearer token is configured.
+  - `POST /mcp` without an `Authorization` header returns 401.
+  - `POST /mcp` with the correct `Bearer <token>` header is not 401.
+  - With no bearer configured, `/mcp` is reachable without
+    credentials.
 - `CHANGELOG.md` following Keep-a-Changelog.
 
 ### Repository
