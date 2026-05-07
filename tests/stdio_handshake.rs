@@ -68,14 +68,19 @@ async fn initialize_handshake_round_trips_over_in_memory_stdio() {
         .expect("write");
     client_writer.flush().await.expect("flush");
 
-    // Read one JSON-RPC line back.
-    let mut reader = BufReader::new(&mut client_reader);
-    let mut response_line = String::new();
-    let n = timeout(Duration::from_secs(5), reader.read_line(&mut response_line))
-        .await
-        .expect("response line within timeout")
-        .expect("read_line");
-    assert!(n > 0, "expected a response line on stdout");
+    // Read one JSON-RPC line back. Scope the `BufReader` so its
+    // mutable borrow on `client_reader` ends before we drop the
+    // reader to signal EOF below.
+    let response_line = {
+        let mut reader = BufReader::new(&mut client_reader);
+        let mut line = String::new();
+        let n = timeout(Duration::from_secs(5), reader.read_line(&mut line))
+            .await
+            .expect("response line within timeout")
+            .expect("read_line");
+        assert!(n > 0, "expected a response line on stdout");
+        line
+    };
 
     let response: Value = serde_json::from_str(response_line.trim()).expect("response is JSON");
 
