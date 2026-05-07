@@ -192,6 +192,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the server over a pair of `tokio::io::duplex` pipes, sends one
   `initialize` request, asserts the response shape (protocol version,
   serverInfo, capabilities), and verifies graceful EOF shutdown.
+- Graceful shutdown + signal handling (`src/main.rs`):
+  - Single shared `tokio_util::sync::CancellationToken` drives shutdown
+    for both transports.
+  - On Unix: SIGTERM **and** SIGINT (Ctrl-C) cancel the token via a
+    `tokio::signal::unix::signal` task; on Windows we fall back to
+    SIGINT only. The first signal cancels; subsequent signals are
+    no-ops.
+  - stdio path uses `serve_with_ct(stdio(), shutdown)` so a signal
+    interrupts the running rmcp service alongside EOF on stdin.
+  - HTTP path passes the same token to `http_transport::serve` so
+    axum + rmcp both observe the cancellation.
+  - `main` returns `ExitCode` directly: `0` on clean shutdown, `1`
+    on a startup-config / build / bind error (with a single-line
+    stderr message — `error: cause: cause` chain joined with `:`,
+    no embedded newlines). `2` is reserved for "upstream auth
+    failure on first authenticated call" and lands with v0.2.
+- `tests/graceful_shutdown.rs`: spins the HTTP transport on a random
+  local port, drives `cancel.cancel()` as the unit-test stand-in for
+  SIGTERM, and asserts the server task exits within the 5 s grace
+  period.
 - HTTP / Streamable-HTTP transport (`src/http_transport.rs`):
   - axum router fronts `rmcp::transport::streamable_http_server::StreamableHttpService`
     at `/mcp` and exposes `GET /healthz` (always unauthenticated).
