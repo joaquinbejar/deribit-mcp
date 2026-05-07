@@ -157,10 +157,14 @@ pub struct SubscriptionEntry {
     pub cancel: CancellationToken,
 }
 
-/// Maximum frames retained in [`SubscriptionEntry::history`]. Sized
-/// for the trades resource (last 32 trades is the v0.3-04 contract);
-/// book / ticker subscribers do not consult the history at all so
-/// the wasted space per entry is small.
+/// Maximum *frames* retained in [`SubscriptionEntry::history`].
+///
+/// The v0.3-04 trades-resource contract is "last ~32 trade events",
+/// so 32 frames is conservative — each upstream `trades.*.raw`
+/// frame typically carries 1..few trade objects, the resource
+/// flattens across frames, and the read still truncates to the
+/// same `HISTORY_CAPACITY`. Book / ticker subscribers do not
+/// consult the history at all; the per-entry overhead is small.
 pub const HISTORY_CAPACITY: usize = 32;
 
 /// Shared inner state of [`LiveRegistry`]. Held behind an `Arc` so a
@@ -326,13 +330,14 @@ impl LiveRegistry {
 ///
 /// - `book` → `book.<instrument>.raw` (uncoalesced — v0.3-02 ships
 ///   the raw channel; v0.4+ may expose aggregated variants).
-/// - `ticker` → `ticker.<instrument>.100ms`.
-/// - `trades` → `trades.<instrument>.100ms`.
+/// - `ticker` → `ticker.<instrument>.100ms` (throttled, the
+///   appropriate cadence for LLM consumption).
+/// - `trades` → `trades.<instrument>.raw` per the v0.3-04 spec.
 pub fn channel_name_for(uri: &ResourceUri) -> String {
     match uri {
         ResourceUri::Book { instrument } => format!("book.{instrument}.raw"),
         ResourceUri::Ticker { instrument } => format!("ticker.{instrument}.100ms"),
-        ResourceUri::Trades { instrument } => format!("trades.{instrument}.100ms"),
+        ResourceUri::Trades { instrument } => format!("trades.{instrument}.raw"),
         // Static URIs never reach the live registry; the parser
         // and dispatcher route them elsewhere. Use a stable string
         // so debug output is informative if a future refactor
@@ -491,11 +496,12 @@ impl TickerSnapshot {
 
 /// One trade event from `trades.<instrument>.raw`.
 ///
-/// Closed-set fields (`direction`, `liquidation`,
-/// `tick_direction`) carry the upstream string verbatim; the
-/// resource layer does not enumerate them as Rust enums to keep
-/// the wire shape pass-through. Adding closed-set decoders is a
-/// straight follow-up if the LLM client needs typed checks.
+/// `direction` and `liquidation` carry the upstream string
+/// verbatim; `tick_direction` is the upstream integer (`0..=3`)
+/// also passed through unchanged. The resource layer does not
+/// enumerate these as Rust enums to keep the wire shape
+/// pass-through. Adding closed-set decoders is a straight
+/// follow-up if the LLM client needs typed checks.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub struct TradeUpdate {
@@ -778,7 +784,7 @@ mod tests {
             channel_name_for(&ResourceUri::Trades {
                 instrument: "BTC-31MAY24-50000-C".to_string()
             }),
-            "trades.BTC-31MAY24-50000-C.100ms"
+            "trades.BTC-31MAY24-50000-C.raw"
         );
     }
 }

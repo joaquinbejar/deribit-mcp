@@ -392,27 +392,42 @@ impl ResourceRegistry {
             }
             ResourceUri::Trades { .. } => {
                 // Subscribe (so the reader task is running) and
-                // hand back the rolling history of the last N
-                // decoded frames. Each frame is an array of
-                // trades; we flatten across frames so the LLM
-                // sees a chronological list of `TradeUpdate`s
-                // newest-first, capped at `HISTORY_CAPACITY`.
+                // hand back the rolling history of decoded
+                // trades. Each upstream frame is an array of
+                // trade objects; we flatten across frames and
+                // sort by timestamp newest-first so the LLM
+                // sees a deterministic chronological list,
+                // capped at `HISTORY_CAPACITY`.
+                use tokio::sync::broadcast::error::RecvError;
                 let provider = self.provider.as_ref().ok_or_else(|| {
                     AdapterError::internal("live subscription provider not configured")
                 })?;
                 let handle = self.live.subscribe(provider.as_ref(), uri).await?;
                 let mut updates = handle.updates();
                 if handle.latest().await.is_none() {
-                    let _ = tokio::time::timeout(FIRST_FRAME_TIMEOUT, updates.recv()).await;
+                    match tokio::time::timeout(FIRST_FRAME_TIMEOUT, updates.recv()).await {
+                        Ok(Ok(())) | Ok(Err(RecvError::Lagged(_))) => {}
+                        Ok(Err(RecvError::Closed)) => {
+                            return Err(AdapterError::internal(
+                                "live subscription closed before producing a frame",
+                            ));
+                        }
+                        Err(_elapsed) => {
+                            return Err(AdapterError::internal(
+                                "live subscription did not produce a frame in time",
+                            ));
+                        }
+                    }
                 }
                 let mut trades: Vec<TradeUpdate> = Vec::new();
                 for frame in handle.history().await {
-                    let mut decoded = TradeUpdate::batch_from_value(&frame).unwrap_or_default();
+                    // Propagate decode errors rather than silently
+                    // dropping a malformed frame — an upstream
+                    // contract change should surface, not vanish.
+                    let mut decoded = TradeUpdate::batch_from_value(&frame)?;
                     trades.append(&mut decoded);
-                    if trades.len() >= live::HISTORY_CAPACITY {
-                        break;
-                    }
                 }
+                trades.sort_by_key(|t| std::cmp::Reverse(t.timestamp));
                 trades.truncate(live::HISTORY_CAPACITY);
                 Ok(ResourceContent::Json(serde_json::to_value(&trades)?))
             }
@@ -777,13 +792,30 @@ mod tests {
         let content = registry.read(&ctx(), &uri).await.expect("second ok");
         let ResourceContent::Json(value) = content;
         let trades = value.as_array().expect("array");
-        // Newest frame first → t2 then t1.
-        assert!(!trades.is_empty(), "expected at least one trade");
         let ids: Vec<&str> = trades
             .iter()
             .filter_map(|t| t.get("trade_id").and_then(|v| v.as_str()))
             .collect();
-        assert!(ids.contains(&"t2"));
+        assert_eq!(
+            ids,
+            vec!["t2", "t1"],
+            "expected newest-first ordering; got {ids:?}"
+        );
+        let t2 = &trades[0];
+        assert_eq!(
+            t2.get("liquidation").and_then(|v| v.as_str()),
+            Some("M"),
+            "t2 should carry the liquidation marker"
+        );
+        assert_eq!(t2.get("tick_direction").and_then(|v| v.as_i64()), Some(1));
+        assert_eq!(
+            t2.get("mark_price").and_then(|v| v.as_f64()),
+            Some(50_001.5)
+        );
+        assert_eq!(
+            t2.get("index_price").and_then(|v| v.as_f64()),
+            Some(50_010.0)
+        );
     }
 
     #[tokio::test]
