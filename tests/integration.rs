@@ -51,6 +51,8 @@ fn ctx_with_mock_creds(
     with_creds: bool,
     allow_trading: bool,
 ) -> Arc<AdapterContext> {
+    use deribit_http::config::credentials::ApiCredentials;
+
     let server_url = server_url.trim_end_matches('/');
     let with_prefix = format!("{server_url}/api/v2");
     let parsed = Url::parse(&with_prefix).expect("mock URL");
@@ -58,6 +60,14 @@ fn ctx_with_mock_creds(
     http_cfg.base_url = parsed;
     http_cfg.testnet = true;
     http_cfg.timeout = Duration::from_secs(2);
+    if with_creds {
+        http_cfg.credentials = Some(ApiCredentials {
+            client_id: Some("id".to_string()),
+            client_secret: Some("secret".to_string()),
+        });
+    } else {
+        http_cfg.credentials = None;
+    }
     let http = DeribitHttpClient::with_config(http_cfg);
 
     // Build a normal context, then swap in the http client.
@@ -70,6 +80,12 @@ fn ctx_with_mock_creds(
 /// Anonymous-context shorthand.
 fn ctx_with_mock(server_url: &str) -> Arc<AdapterContext> {
     ctx_with_mock_creds(server_url, false, false)
+}
+
+/// Same as [`ctx_with_mock_creds`] but routes the upstream HTTP
+/// client through the mock server. Used by the OAuth-flow tests.
+fn ctx_with_mock_authenticated(server_url: &str) -> Arc<AdapterContext> {
+    ctx_with_mock_creds(server_url, true, false)
 }
 
 #[tokio::test]
@@ -236,6 +252,136 @@ async fn resources_read_currencies_returns_upstream_payload() {
             assert!(array.iter().any(|v| v["currency"] == "BTC"));
         }
     }
+}
+
+#[tokio::test]
+async fn first_private_call_triggers_oauth_against_mock() {
+    let mut server = mockito::Server::new_async().await;
+
+    let auth_body = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 0,
+        "result": {
+            "access_token": "test-access",
+            "expires_in": 900,
+            "refresh_token": "test-refresh",
+            "scope": "session:test",
+            "token_type": "Bearer"
+        }
+    });
+    let auth_mock = server
+        .mock("GET", "/api/v2/public/auth")
+        .match_query(mockito::Matcher::Any)
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(auth_body.to_string())
+        .expect_at_least(1)
+        .create_async()
+        .await;
+
+    // `AccountSummaryResponse` defaults every field via `#[serde(default)]`,
+    // so an empty `result` object deserialises cleanly. We only need to
+    // observe that the call hit `/private/get_account_summary` carrying a
+    // `Bearer` header — that proves OAuth flowed through the upstream
+    // `AuthManager`.
+    let summary_body = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 0,
+        "result": {}
+    });
+    let summary_mock = server
+        .mock("GET", "/api/v2/private/get_account_summary")
+        .match_query(mockito::Matcher::Any)
+        .match_header(
+            "authorization",
+            mockito::Matcher::Regex("^Bearer ".to_string()),
+        )
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(summary_body.to_string())
+        .expect(1)
+        .create_async()
+        .await;
+
+    let ctx = ctx_with_mock_authenticated(&server.url());
+    assert_eq!(ctx.auth_state(), deribit_mcp::AuthState::Configured);
+
+    // Drive a private call. The upstream `AuthManager` hits
+    // `/public/auth` lazily, then issues the private call with a
+    // `Bearer` header.
+    ctx.http
+        .get_account_summary("BTC", Some(false))
+        .await
+        .expect("get_account_summary");
+
+    auth_mock.assert_async().await;
+    summary_mock.assert_async().await;
+}
+
+#[tokio::test]
+async fn second_private_call_reuses_token() {
+    let mut server = mockito::Server::new_async().await;
+
+    let auth_body = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 0,
+        "result": {
+            "access_token": "test-access",
+            "expires_in": 900,
+            "refresh_token": "test-refresh",
+            "scope": "session:test",
+            "token_type": "Bearer"
+        }
+    });
+    let auth_mock = server
+        .mock("GET", "/api/v2/public/auth")
+        .match_query(mockito::Matcher::UrlEncoded(
+            "grant_type".into(),
+            "client_credentials".into(),
+        ))
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(auth_body.to_string())
+        // `expect(1)` asserts the auth endpoint is hit exactly once
+        // even after multiple private calls — the token is cached
+        // by `deribit-http`'s `AuthManager`.
+        .expect(1)
+        .create_async()
+        .await;
+
+    let summary_body = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 0,
+        "result": {}
+    });
+    let summary_mock = server
+        .mock("GET", "/api/v2/private/get_account_summary")
+        .match_query(mockito::Matcher::AllOf(vec![
+            mockito::Matcher::UrlEncoded("currency".into(), "BTC".into()),
+            mockito::Matcher::UrlEncoded("extended".into(), "false".into()),
+        ]))
+        .match_header(
+            "authorization",
+            mockito::Matcher::Regex("^Bearer ".to_string()),
+        )
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(summary_body.to_string())
+        .expect(2)
+        .create_async()
+        .await;
+
+    let ctx = ctx_with_mock_authenticated(&server.url());
+
+    for _ in 0..2 {
+        ctx.http
+            .get_account_summary("BTC", Some(false))
+            .await
+            .expect("get_account_summary");
+    }
+
+    auth_mock.assert_async().await;
+    summary_mock.assert_async().await;
 }
 
 #[tokio::test]
