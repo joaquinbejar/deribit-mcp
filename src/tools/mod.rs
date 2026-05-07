@@ -25,7 +25,16 @@ pub mod trading;
 /// Driven by ADR-0003. The class is part of the handler's type, not a
 /// runtime field — the registry refuses to register a `Trading` tool
 /// without the corresponding feature gate.
+///
+/// Marked `#[non_exhaustive]` so adding a new class in a future
+/// milestone (e.g. an `Admin` class for operational tools) is not a
+/// SemVer break for callers outside the crate. Matches inside the
+/// adapter remain exhaustive — the project's coding rules only forbid
+/// `_` arms on the closed-set enums explicitly enumerated there
+/// (`AdapterError`, `Side`, `OrderType`, `OrderState`,
+/// `InstrumentKind`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[non_exhaustive]
 pub enum ToolClass {
     /// Read-only public market data. No auth required.
     Read,

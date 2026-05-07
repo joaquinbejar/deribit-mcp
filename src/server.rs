@@ -9,12 +9,17 @@
 //!
 //! Capabilities advertised match `doc/MCP-SPEC.md` §5:
 //!
-//! - `tools` with `listChanged: false`.
-//! - `resources` with `subscribe: true, listChanged: false`.
+//! - `tools` (no `listChanged`).
+//! - `resources` with `subscribe: true` (no `listChanged`).
 //! - `logging`.
 //!
 //! `prompts` and `sampling` are deliberately not advertised in v0.1.
+//!
+//! `listChanged` is left unset on the `tools` and `resources`
+//! capabilities — `rmcp` omits the field from the wire JSON and the MCP
+//! spec treats an omitted `listChanged` as `false`.
 
+use std::future::Future;
 use std::sync::Arc;
 
 use rmcp::model::{
