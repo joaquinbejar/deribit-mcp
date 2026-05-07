@@ -106,6 +106,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     requirement for the `NotEnabled` payload.
 - Per-family registration hooks (`src/tools/{public,account,trading}.rs`)
   are empty in v0.1-06 — v0.1-10 / v0.1-11 / v0.2 / v0.4 fill them.
+- Static resource registry, `deribit://` URI parser, and read
+  dispatch (`src/resources/mod.rs`):
+  - `ResourceUri` strongly-typed variants for every documented
+    template: `Currencies`, `Instruments { currency }`,
+    `Book { instrument }`, `Ticker { instrument }`,
+    `Trades { instrument }`.
+  - `parse_resource_uri()` accepts the full template set and
+    returns `AdapterError::Validation` on anything else (wrong
+    scheme, unknown head, missing tail, malformed currency or
+    instrument segment).
+  - `ResourceUri::to_uri()` round-trips back to the canonical
+    string form.
+  - `ResourceRegistry::build()` produces the v0.1 catalogue: one
+    static entry (`deribit://currencies`) plus four templates
+    (`instruments/{currency}`, `book/{instrument}`,
+    `ticker/{instrument}`, `trades/{instrument}`).
+  - `ResourceRegistry::read()` is the dispatch surface; v0.1-12
+    fills the static reads, v0.3 fills the live reads. Until then
+    every URI returns a structured `Validation` error.
+- `DeribitMcpServer::new` now constructs both registries from the
+  context (was empty stubs).
 - `CHANGELOG.md` following Keep-a-Changelog.
 
 ### Repository
