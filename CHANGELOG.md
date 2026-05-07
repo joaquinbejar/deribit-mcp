@@ -145,10 +145,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - HTTP / Streamable-HTTP transport (`src/http_transport.rs`):
   - axum router fronts `rmcp::transport::streamable_http_server::StreamableHttpService`
     at `/mcp` and exposes `GET /healthz` (always unauthenticated).
-  - Optional static bearer-token auth per `Config::http_bearer_token`
-    (env-only): every `/mcp` request must carry
+  - Optional static bearer-token auth read only from
+    `DERIBIT_HTTP_BEARER_TOKEN` (env / `.env`, no CLI flag, per
+    ADR-0004): every `/mcp` request must carry
     `Authorization: Bearer <token>`; mismatches return `401` with a
     `WWW-Authenticate: Bearer` hint. Comparison is constant-time.
+  - The middleware is layered on the `/mcp` sub-router only, so
+    unknown paths surface a natural 404 and `/healthz` stays
+    unauthenticated by construction.
   - Loopback-only host allow-list by default; reverse proxies pre-bind
     a public hostname.
   - Graceful shutdown via a `tokio_util::sync::CancellationToken`

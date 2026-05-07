@@ -75,7 +75,7 @@ url = "2"
 
 # HTTP server (transport=http branch). axum + tower wrap rmcp's
 # `StreamableHttpService` and add `/healthz` plus the optional
-# `--http-bearer-token` middleware.
+# `DERIBIT_HTTP_BEARER_TOKEN` middleware (env-only per ADR-0004).
 axum = "0.8"
 tower = "0.5"
 hyper = { version = "1", features = ["server", "http1"] }
