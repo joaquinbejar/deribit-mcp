@@ -164,7 +164,8 @@ pub struct SubscriptionEntry {
 /// Sink that the live registry calls every time a subscribed URI
 /// produces a new (post-throttle) snapshot.
 ///
-/// The MCP server impl wires this to `Peer::notify_resource_updated`
+/// The MCP server impl is expected to wire this to rmcp's
+/// `Peer::notify_resource_updated` (in `rmcp::service::server`)
 /// so the connected client sees `notifications/resources/updated`
 /// per the MCP 2025-06-18 spec; tests pass a stub that just counts
 /// the calls.
@@ -401,6 +402,20 @@ impl LiveRegistry {
 
 /// Apply the notification throttle and, if eligible, fire the sink.
 async fn maybe_notify(entry: &SubscriptionEntry, uri: &ResourceUri, shared: &LiveRegistryShared) {
+    // Snapshot the sink (drop the read guard before calling user
+    // code) and short-circuit when no sink is installed. Critically
+    // we do NOT advance `last_notified` in the no-sink path —
+    // frames received while detached must not "use up" the throttle
+    // window, so the next sink attach gets a notification on the
+    // very next frame.
+    let sink = {
+        let guard = shared.sink.read().await;
+        match guard.as_ref() {
+            Some(sink) => sink.clone(),
+            None => return,
+        }
+    };
+
     let interval = *shared.notify_interval.read().await;
     let mut last = entry.last_notified.lock().await;
     let now = Instant::now();
@@ -415,9 +430,7 @@ async fn maybe_notify(entry: &SubscriptionEntry, uri: &ResourceUri, shared: &Liv
     }
     *last = Some(now);
     drop(last);
-    if let Some(sink) = shared.sink.read().await.as_ref().cloned() {
-        sink.notify(uri);
-    }
+    sink.notify(uri);
 }
 
 /// Map a live `ResourceUri` to its upstream Deribit channel name.
@@ -895,6 +908,67 @@ mod tests {
         assert!(
             !sink.calls.lock().unwrap().is_empty(),
             "expected at least one notification"
+        );
+    }
+
+    #[tokio::test]
+    async fn notification_throttle_does_not_advance_without_sink() {
+        // Provider produces one frame; the registry has no sink
+        // installed. The throttle MUST NOT advance during this
+        // frame — otherwise the very next sink attach would be
+        // forced to wait an extra interval before its first
+        // notification, which would mask new attachments by the
+        // length of the window.
+        let provider = StubProvider::with(book_btc(), vec![serde_json::json!({"v": 1})]);
+        let registry = LiveRegistry::new();
+        // Generous window so the assertion is unambiguous.
+        registry.set_notify_interval(Duration::from_secs(10)).await;
+
+        let handle = registry.subscribe(&provider, &book_btc()).await.unwrap();
+        // Wait for the reader task to drain the single frame.
+        for _ in 0..50 {
+            if handle.latest().await.is_some() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+
+        // Now attach the sink and emit a second frame via a fresh
+        // subscribe (in a real flow, frames would still flow on
+        // the first subscription; we just need a fresh signal).
+        let sink = CountingSink::default();
+        registry
+            .set_notification_sink(Some(Arc::new(sink.clone())))
+            .await;
+
+        // Drop the existing handle so the registry tears down the
+        // first subscription, then drive a fresh subscribe → the
+        // new reader task pushes a frame and the sink should see
+        // it (no throttle window held over from the no-sink phase).
+        drop(handle);
+        // Give the deferred map cleanup a beat.
+        for _ in 0..20 {
+            if registry.is_empty().await {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let provider2 = StubProvider::with(book_btc(), vec![serde_json::json!({"v": 2})]);
+        let _h2 = registry.subscribe(&provider2, &book_btc()).await.unwrap();
+
+        // The first frame produced AFTER the sink was attached
+        // must fire (the throttle window did not advance during
+        // the no-sink phase). Wait for it.
+        for _ in 0..50 {
+            if !sink.calls.lock().unwrap().is_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        assert!(
+            !sink.calls.lock().unwrap().is_empty(),
+            "sink should fire on the first frame after attach, regardless of \
+             frames received while detached"
         );
     }
 

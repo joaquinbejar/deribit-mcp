@@ -14,9 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `sink.notify(&uri)` post-throttle every time a subscribed
     URI produces a new snapshot. `LiveRegistry::set_notification_sink(...)`
     installs / detaches the sink at runtime; the MCP server impl
-    wires this to `Peer::notify_resource_updated` so connected
-    clients receive `notifications/resources/updated` per the
-    MCP 2025-06-18 spec.
+    is expected to wire this to rmcp's `Peer::notify_resource_updated`
+    (`rmcp::service::server`) so connected clients receive
+    `notifications/resources/updated` per the MCP 2025-06-18 spec.
   - `DEFAULT_NOTIFY_INTERVAL = 100 ms` (≈ 10 Hz). The
     coalescing throttle suppresses intermediate frames within
     the window; the next `resources/read` returns the latest
