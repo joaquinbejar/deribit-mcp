@@ -1,9 +1,18 @@
 //! Binary entry point for `deribit-mcp`.
 //!
-//! Parses CLI arguments, selects the transport (stdio in v0.1-08;
-//! HTTP/SSE in v0.1-09), and hands off to the `rmcp` runtime. Treats
-//! stdin EOF (or `rmcp`'s reported `QuitReason::Closed`) as a clean
-//! shutdown signal.
+//! Parses CLI arguments, selects the transport (stdio or HTTP/SSE),
+//! and hands off to the `rmcp` runtime. Honors SIGINT / SIGTERM for
+//! clean shutdown per ADR-0011.
+//!
+//! Exit codes:
+//!
+//! - `0` — clean shutdown (EOF on stdin, SIGINT, SIGTERM, or HTTP
+//!   server exited cleanly via the cancellation token).
+//! - `1` — startup-config error (failed to load `Config`, build
+//!   `AdapterContext`, or bind a transport).
+//! - `2` — reserved for upstream auth failure on the first
+//!   authenticated call. v0.2 wires this when the first authenticated
+//!   tool call surfaces an `AdapterError::Auth` at startup.
 //!
 //! `anyhow` is acceptable here — `main.rs` is the only place in the
 //! crate that is allowed to bubble up startup failures to a printed
@@ -12,6 +21,7 @@
 #![forbid(unsafe_code)]
 #![allow(clippy::print_stdout, clippy::print_stderr)]
 
+use std::process::ExitCode;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
@@ -25,8 +35,24 @@ use deribit_mcp::http_transport;
 use deribit_mcp::observability;
 use deribit_mcp::server::DeribitMcpServer;
 
+/// Process exit code for a startup-time configuration failure.
+const EXIT_CONFIG_ERROR: u8 = 1;
+
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn main() -> ExitCode {
+    match run().await {
+        Ok(()) => ExitCode::from(0),
+        Err(err) => {
+            // The error path is intentionally allowed to use stderr;
+            // tracing may not be initialised yet (Config::load can
+            // fail) so we print a structured one-liner directly.
+            eprintln!("deribit-mcp: startup error: {err:#}");
+            ExitCode::from(EXIT_CONFIG_ERROR)
+        }
+    }
+}
+
+async fn run() -> Result<()> {
     let config = Config::load().context("loading configuration")?;
 
     observability::init(&config);
@@ -44,6 +70,9 @@ async fn main() -> Result<()> {
 
     let server = DeribitMcpServer::new(ctx.clone());
 
+    let shutdown = CancellationToken::new();
+    install_signal_handlers(shutdown.clone());
+
     match config.transport {
         Transport::Stdio => {
             tracing::info!(
@@ -53,8 +82,11 @@ async fn main() -> Result<()> {
                 transport = "stdio",
                 "starting on {env_label} ({endpoint}); transport=stdio"
             );
+            // rmcp drives its own EOF handling; we additionally wire a
+            // signal-driven cancel so SIGINT / SIGTERM trigger the same
+            // clean exit (the spawned cancel-on-signal task above).
             let running = server
-                .serve(stdio())
+                .serve_with_ct(stdio(), shutdown.clone())
                 .await
                 .context("starting stdio transport")?;
             let reason = running.waiting().await.context("stdio service exited")?;
@@ -77,21 +109,53 @@ async fn main() -> Result<()> {
                 "starting on {env_label} ({endpoint}); transport=http; listen={listen}; bearer={bearer_status}"
             );
 
-            let cancel = CancellationToken::new();
-            let cancel_signal = cancel.clone();
             let cfg = Arc::new(config);
-            tokio::spawn(async move {
-                if let Ok(()) = tokio::signal::ctrl_c().await {
-                    tracing::info!("ctrl-c received; shutting down HTTP transport");
-                    cancel_signal.cancel();
-                }
-            });
-
-            http_transport::serve(cfg, ctx, cancel)
+            http_transport::serve(cfg, ctx, shutdown)
                 .await
                 .context("HTTP transport")?;
         }
     }
 
     Ok(())
+}
+
+/// Install a task that cancels `shutdown` when SIGINT (Ctrl-C) or
+/// SIGTERM (Unix only) is received. Idempotent: the first signal
+/// cancels; further signals are no-ops because the shared
+/// `CancellationToken` only cancels once.
+fn install_signal_handlers(shutdown: CancellationToken) {
+    tokio::spawn(async move {
+        let signal = first_termination_signal().await;
+        tracing::info!(?signal, "shutdown signal received; cancelling");
+        shutdown.cancel();
+    });
+}
+
+/// Wait for whichever termination signal arrives first.
+///
+/// On Unix that's SIGINT or SIGTERM; on Windows we fall back to
+/// SIGINT (Ctrl-C) only.
+async fn first_termination_signal() -> &'static str {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{SignalKind, signal};
+        let mut sigterm = match signal(SignalKind::terminate()) {
+            Ok(s) => s,
+            Err(err) => {
+                tracing::warn!(error = %err, "failed to install SIGTERM handler; SIGINT only");
+                let _ = tokio::signal::ctrl_c().await;
+                return "SIGINT";
+            }
+        };
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => "SIGINT",
+            _ = sigterm.recv() => "SIGTERM",
+        }
+    }
+
+    #[cfg(not(unix))]
+    {
+        let _ = tokio::signal::ctrl_c().await;
+        "SIGINT"
+    }
 }
