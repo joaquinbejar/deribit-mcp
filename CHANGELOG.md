@@ -9,6 +9,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Live resource registry + lifecycle (`src/resources/live.rs`):
+  - `LiveRegistry` keys per `ResourceUri`. First subscriber opens
+    the upstream channel via the new `SubscriptionProvider`
+    trait; subsequent subscribers reuse the cached entry
+    (refcount++).
+  - `SubscriptionHandle` decrements the refcount on `Drop`. When
+    the count returns to zero the per-entry
+    `tokio_util::sync::CancellationToken` is fired, the upstream
+    reader task exits, and the entry is removed from the map.
+  - `SubscriptionEntry` carries the upstream channel name, latest
+    decoded snapshot (`tokio::sync::Mutex<Option<Value>>`), a
+    per-entry `broadcast::Sender<()>` for update fan-out
+    (capacity 64), and the cancel token.
+  - Refcount uses checked arithmetic — `fetch_add(1)` is asserted
+    against `u64::MAX` overflow; `fetch_sub` paths only tear down
+    when `prev == 1` so an under-decrement could not silently
+    succeed.
+  - `SubscriptionProvider` trait abstracts the v0.3-02 / v0.3-04
+    real `deribit-websocket` wiring so the registry has a stub-
+    backed test surface.
+  - `ResourceUri` now derives `Hash` to live in the per-channel
+    map.
+  - New deps: `futures-core` + `futures-util` (stream combinators
+    for the reader task).
 - Sandbox smoke test (`tests/sandbox_smoke.rs`):
   - Drives `get_server_time`, `get_ticker BTC-PERPETUAL`,
     `get_account_summary BTC`, `get_positions BTC` end-to-end
