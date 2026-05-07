@@ -49,6 +49,35 @@ fn tool_input_schemas_unchanged() {
     insta::assert_yaml_snapshot!("tool_input_schemas", schemas);
 }
 
+/// Snapshot the input schema of every Account-class tool that
+/// only registers when credentials are present (v0.2). Lives in
+/// `tests/snapshots/schema__account_tool_input_schemas.snap`.
+#[test]
+fn account_tool_input_schemas_unchanged() {
+    let with_creds = ToolRegistry::build(&ctx(true, false));
+    let no_creds = ToolRegistry::build(&ctx(false, false));
+    let no_creds_names: std::collections::HashSet<String> = no_creds
+        .list()
+        .into_iter()
+        .map(|t| t.name.to_string())
+        .collect();
+    let mut tools: Vec<_> = with_creds
+        .list()
+        .into_iter()
+        .filter(|t| !no_creds_names.contains(t.name.as_ref()))
+        .collect();
+    tools.sort_by(|a, b| a.name.cmp(&b.name));
+    let schemas: Vec<(String, serde_json::Value)> = tools
+        .into_iter()
+        .map(|tool| {
+            let name = tool.name.to_string();
+            let schema = serde_json::Value::Object((*tool.input_schema).clone());
+            (name, schema)
+        })
+        .collect();
+    insta::assert_yaml_snapshot!("account_tool_input_schemas", schemas);
+}
+
 /// Snapshot the JSON wire shape of every documented `AdapterError`
 /// variant. The serde-tagged representation is a public contract.
 #[test]

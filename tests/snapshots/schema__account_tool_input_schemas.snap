@@ -1,0 +1,53 @@
+---
+source: tests/schema.rs
+expression: schemas
+---
+- - get_account_summary
+  - $schema: "https://json-schema.org/draft/2020-12/schema"
+    description: "`get_account_summary` input."
+    properties:
+      currency:
+        description: "Currency to summarise (`BTC`, `ETH`, `USDC`, …)."
+        type: string
+      extended:
+        description: "Include the per-currency `summaries[]` (id, email, account\ntype, …). Defaults to `false` upstream."
+        type:
+          - boolean
+          - "null"
+    required:
+      - currency
+    title: GetAccountSummaryInput
+    type: object
+- - get_positions
+  - $schema: "https://json-schema.org/draft/2020-12/schema"
+    description: "`get_positions` input."
+    properties:
+      currency:
+        description: "Optional currency filter (`BTC`, `ETH`, …). When omitted the\nupstream returns positions across every currency."
+        type:
+          - string
+          - "null"
+      kind:
+        description: "Optional instrument-kind filter: `future`, `option`, `spot`,\n`future_combo`, `option_combo`."
+        type:
+          - string
+          - "null"
+      subaccount_id:
+        description: Optional subaccount id to scope the query to.
+        format: int32
+        type:
+          - integer
+          - "null"
+    title: GetPositionsInput
+    type: object
+- - get_subaccounts
+  - $schema: "https://json-schema.org/draft/2020-12/schema"
+    description: "`get_subaccounts` input."
+    properties:
+      with_portfolio:
+        description: "When `true`, include each subaccount's portfolio in the\nresponse. Defaults to `false` upstream."
+        type:
+          - boolean
+          - "null"
+    title: GetSubaccountsInput
+    type: object

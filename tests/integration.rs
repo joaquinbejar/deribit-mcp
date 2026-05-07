@@ -319,6 +319,106 @@ async fn first_private_call_triggers_oauth_against_mock() {
 }
 
 #[tokio::test]
+async fn account_tools_register_only_with_credentials() {
+    let anon = ToolRegistry::build(&ctx_with_mock("http://127.0.0.1:0/"));
+    assert!(!anon.contains("get_account_summary"));
+    assert!(!anon.contains("get_positions"));
+    assert!(!anon.contains("get_subaccounts"));
+
+    let with_creds = ToolRegistry::build(&ctx_with_mock_authenticated("http://127.0.0.1:0/"));
+    assert!(with_creds.contains("get_account_summary"));
+    assert!(with_creds.contains("get_positions"));
+    assert!(with_creds.contains("get_subaccounts"));
+    for name in ["get_account_summary", "get_positions", "get_subaccounts"] {
+        let entry = with_creds.get(name).expect("entry");
+        assert_eq!(entry.class(), deribit_mcp::tools::ToolClass::Account);
+    }
+}
+
+#[tokio::test]
+async fn account_summary_tool_dispatches_through_registry() {
+    let mut server = mockito::Server::new_async().await;
+
+    let auth_body = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 0,
+        "result": {
+            "access_token": "test-access",
+            "expires_in": 900,
+            "refresh_token": "test-refresh",
+            "scope": "session:test",
+            "token_type": "Bearer"
+        }
+    });
+    server
+        .mock("GET", "/api/v2/public/auth")
+        .match_query(mockito::Matcher::Any)
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(auth_body.to_string())
+        .expect_at_least(1)
+        .create_async()
+        .await;
+
+    let summary_body = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 0,
+        "result": { "id": 42, "username": "test-user" }
+    });
+    let summary_mock = server
+        .mock("GET", "/api/v2/private/get_account_summary")
+        .match_query(mockito::Matcher::Any)
+        .match_header(
+            "authorization",
+            mockito::Matcher::Regex("^Bearer ".to_string()),
+        )
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(summary_body.to_string())
+        .expect(1)
+        .create_async()
+        .await;
+
+    let ctx = ctx_with_mock_authenticated(&server.url());
+    let registry = ToolRegistry::build(&ctx);
+    let out = registry
+        .call(
+            &ctx,
+            "get_account_summary",
+            serde_json::json!({"currency": "BTC"}),
+        )
+        .await
+        .expect("ok");
+
+    assert_eq!(out.get("id").and_then(Value::as_u64), Some(42));
+    assert_eq!(
+        out.get("username").and_then(Value::as_str),
+        Some("test-user")
+    );
+    summary_mock.assert_async().await;
+}
+
+#[tokio::test]
+async fn account_summary_without_credentials_is_validation_error() {
+    let ctx = ctx_with_mock("http://127.0.0.1:0/");
+    let registry = ToolRegistry::build(&ctx);
+    let err = registry
+        .call(
+            &ctx,
+            "get_account_summary",
+            serde_json::json!({"currency": "BTC"}),
+        )
+        .await
+        .unwrap_err();
+    // Account tool is absent from the registry without credentials,
+    // so dispatch surfaces the registry-miss path.
+    match err {
+        AdapterError::Validation { field, .. } => assert_eq!(field, "name"),
+        other => panic!("unexpected: {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn second_private_call_reuses_token() {
     let mut server = mockito::Server::new_async().await;
 
