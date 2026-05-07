@@ -160,6 +160,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     every URI returns a structured `Validation` error.
 - `DeribitMcpServer::new` now constructs both registries from the
   context (was empty stubs).
+- Static resource reads (`src/resources/static_.rs`):
+  - `read_currencies(ctx)` → upstream `get_currencies()`.
+  - `read_instruments(ctx, currency)` → upstream
+    `get_instruments(currency, None, None)` (kind unfiltered, expired
+    excluded).
+  - Wired into `ResourceRegistry::read`:
+    `Currencies` / `Instruments` route to the upstream HTTP call;
+    live URIs (`Book`, `Ticker`, `Trades`) return
+    `AdapterError::Internal { reason: "live resources land in v0.3" }`
+    so the LLM sees a stable error shape until v0.3 ships.
+  - Live-template descriptions and module docs updated to match the
+    new error shape.
 - stdio transport wiring (`src/main.rs`):
   - Async `tokio::main` runtime; `Config::load` →
     `observability::init` → `AdapterContext::new` →
