@@ -192,6 +192,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the server over a pair of `tokio::io::duplex` pipes, sends one
   `initialize` request, asserts the response shape (protocol version,
   serverInfo, capabilities), and verifies graceful EOF shutdown.
+- Reference Compose recipe + env template (`docker-compose.yml`,
+  `.env.example`) per `doc/DERIBIT-INTEGRATION.md` §11.2:
+  - `docker-compose.yml`: `image: ghcr.io/joaquinbejar/deribit-mcp:latest`,
+    `restart: unless-stopped`, `command: --transport=http
+    --listen=0.0.0.0:8723 --testnet` (operator flips to mainnet by
+    swapping the last argument), `env_file: .env`,
+    `DERIBIT_HTTP_BEARER_TOKEN` + `RUST_LOG` carried from the host
+    shell, `127.0.0.1:8723:8723` loopback bind.
+  - No in-container `HEALTHCHECK`: the runtime is distroless and
+    has no shell / `curl` / `nc`; orchestrators probe `/healthz`
+    from outside (k8s `httpGet`, Portainer health tab, reverse
+    proxy). Inline comment in the Compose file documents this.
+  - `.env.example`: `DERIBIT_CLIENT_ID`, `DERIBIT_CLIENT_SECRET`,
+    `DERIBIT_HTTP_BEARER_TOKEN`, `RUST_LOG`. Empty values; the
+    `.env` actual file is gitignored under the existing `.env*`
+    rule (with `.env.example` allow-listed).
 - Container packaging (`Dockerfile`, `.dockerignore`) per ADR-0011:
   - Multi-stage build: `rust:1.85-slim-bookworm` builder pinned to
     MSRV → distroless `gcr.io/distroless/cc-debian12:nonroot`
