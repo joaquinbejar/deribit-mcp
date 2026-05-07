@@ -485,7 +485,13 @@ async fn second_private_call_reuses_token() {
 }
 
 #[tokio::test]
-async fn resources_read_live_uri_returns_internal_until_v03() {
+async fn resources_read_book_without_provider_returns_internal() {
+    // Without a `SubscriptionProvider` configured on the registry,
+    // a read on `deribit://book/...` returns the documented
+    // `AdapterError::Internal { reason: "live subscription
+    // provider not configured" }` placeholder. v0.3-02 wires the
+    // happy path; the unit-test for that lives in `src/resources/mod.rs`
+    // with a stub provider.
     let ctx = ctx_with_mock("http://127.0.0.1:0/");
     let registry = ResourceRegistry::build();
     let err = registry
@@ -499,7 +505,7 @@ async fn resources_read_live_uri_returns_internal_until_v03() {
         .unwrap_err();
     match err {
         AdapterError::Internal { ref reason } => {
-            assert_eq!(reason, "live resources land in v0.3");
+            assert!(reason.contains("provider"), "unexpected reason: {reason}");
         }
         other => panic!("unexpected: {other:?}"),
     }

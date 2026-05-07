@@ -7,13 +7,21 @@
 //!   v0.3 per ADR-0006.
 //!
 //! v0.1-07 shipped the URI parser, catalogue, and dispatch surface.
-//! v0.1-12 wires the two static reads:
+//! v0.1-12 wired the two static reads:
 //! `deribit://currencies` → `static_::read_currencies`,
 //! `deribit://instruments/{currency}` → `static_::read_instruments`.
-//! Live URIs (`book`, `ticker`, `trades`) are accepted by the parser
-//! but `read()` returns
-//! [`AdapterError::Internal { reason: "live resources land in v0.3" }`](AdapterError::Internal)
-//! until v0.3 wires the WebSocket transport.
+//! v0.3-02 wires `deribit://book/{instrument}` through the
+//! [`LiveRegistry`] when a [`SubscriptionProvider`] is attached.
+//! `deribit://ticker/{instrument}` (v0.3-03) and
+//! `deribit://trades/{instrument}` (v0.3-04) are accepted by the
+//! parser but `read()` still returns
+//! [`AdapterError::Internal`] until those issues land. Without a
+//! `SubscriptionProvider`, even `Book` falls back to
+//! `AdapterError::Internal { reason: "live subscription provider
+//! not configured" }`.
+
+use std::sync::Arc;
+use std::time::Duration;
 
 use rmcp::model::{Annotated, RawResource, RawResourceTemplate, Resource, ResourceTemplate};
 
@@ -23,12 +31,15 @@ use crate::error::AdapterError;
 pub mod live;
 pub mod static_;
 
+use live::{BookSnapshot, LiveRegistry, SubscriptionProvider};
+
 /// Strongly-typed `deribit://` URI variants.
 ///
-/// The parser accepts every documented template; serving lives behind
-/// [`ResourceRegistry::read`], which returns
-/// [`AdapterError::Validation`] for variants the milestone has not yet
-/// wired (live resources land in v0.3).
+/// The parser accepts every documented template; serving lives
+/// behind [`ResourceRegistry::read`]. As of v0.3-02 `Book` is
+/// served through the [`LiveRegistry`]; the remaining live URIs
+/// (`Ticker`, `Trades`) still return [`AdapterError::Internal`]
+/// until v0.3-03 / v0.3-04 wire them.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ResourceUri {
     /// `deribit://currencies` — the currency catalogue (static).
@@ -205,16 +216,60 @@ pub enum ResourceContent {
 }
 
 /// Registry of MCP resources the server exposes.
-#[derive(Debug, Default, Clone)]
+#[derive(Clone)]
 pub struct ResourceRegistry {
     list: ResourceList,
+    live: LiveRegistry,
+    /// Optional provider for live subscriptions. `None` until the
+    /// upstream `deribit-websocket` provider is configured (default
+    /// for v0.1 / anonymous contexts); reads on live URIs return
+    /// `AdapterError::Internal` when missing.
+    provider: Option<Arc<dyn SubscriptionProvider>>,
 }
+
+impl std::fmt::Debug for ResourceRegistry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ResourceRegistry")
+            .field("list", &self.list)
+            .field("live", &self.live)
+            .field(
+                "provider",
+                &self.provider.as_ref().map(|_| "<dyn SubscriptionProvider>"),
+            )
+            .finish()
+    }
+}
+
+impl Default for ResourceRegistry {
+    fn default() -> Self {
+        Self {
+            list: ResourceList::default(),
+            live: LiveRegistry::new(),
+            provider: None,
+        }
+    }
+}
+
+/// Per-call deadline waiting for the first frame on a fresh
+/// subscription. Bounded so a stalled upstream cannot turn a
+/// `resources/read` into an unbounded await.
+const FIRST_FRAME_TIMEOUT: Duration = Duration::from_secs(5);
 
 impl ResourceRegistry {
     /// Construct an empty registry.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Replace the live-subscription provider. The real upstream
+    /// `deribit-websocket` provider is wired by the binary
+    /// startup path (v0.3-02 / -03 / -04); tests pass a stub
+    /// implementation.
+    #[must_use]
+    pub fn with_subscription_provider(mut self, provider: Arc<dyn SubscriptionProvider>) -> Self {
+        self.provider = Some(provider);
+        self
     }
 
     /// Build the v0.1 catalogue.
@@ -246,26 +301,29 @@ impl ResourceRegistry {
         ));
         list.templates.push(make_template(
             "deribit://book/{instrument}",
-            "Deribit order book (live, v0.3+)",
-            "Live order book for an instrument. Read returns \
-             AdapterError::Internal { reason: \"live resources land in v0.3\" } \
-             until v0.3 wires the WebSocket transport.",
+            "Deribit order book (live)",
+            "Order book snapshots from the `book.<instrument>.raw` \
+             channel. Read returns the latest decoded BookSnapshot \
+             when a SubscriptionProvider is configured; otherwise \
+             AdapterError::Internal.",
         ));
         list.templates.push(make_template(
             "deribit://ticker/{instrument}",
-            "Deribit ticker (live, v0.3+)",
-            "Live ticker for an instrument. Read returns \
-             AdapterError::Internal { reason: \"live resources land in v0.3\" } \
-             until v0.3 wires the WebSocket transport.",
+            "Deribit ticker (live, v0.3-03+)",
+            "Live ticker for an instrument. Wired in v0.3-03; \
+             current read returns AdapterError::Internal.",
         ));
         list.templates.push(make_template(
             "deribit://trades/{instrument}",
-            "Deribit last trades (live, v0.3+)",
-            "Live trades for an instrument. Read returns \
-             AdapterError::Internal { reason: \"live resources land in v0.3\" } \
-             until v0.3 wires the WebSocket transport.",
+            "Deribit last trades (live, v0.3-04+)",
+            "Live trades for an instrument. Wired in v0.3-04; \
+             current read returns AdapterError::Internal.",
         ));
-        Self { list }
+        Self {
+            list,
+            live: LiveRegistry::new(),
+            provider: None,
+        }
     }
 
     /// Snapshot the registered resources.
@@ -318,9 +376,55 @@ impl ResourceRegistry {
             ResourceUri::Instruments { currency } => Ok(ResourceContent::Json(
                 static_::read_instruments(ctx, currency).await?,
             )),
-            ResourceUri::Book { .. } | ResourceUri::Ticker { .. } | ResourceUri::Trades { .. } => {
-                Err(AdapterError::internal("live resources land in v0.3"))
+            ResourceUri::Book { instrument } => {
+                let value = self.read_live(uri).await?;
+                let book = BookSnapshot::from_value(instrument, &value)?;
+                Ok(ResourceContent::Json(serde_json::to_value(&book)?))
             }
+            ResourceUri::Ticker { .. } | ResourceUri::Trades { .. } => Err(AdapterError::internal(
+                "live ticker / trades land in v0.3-03 / v0.3-04",
+            )),
+        }
+    }
+
+    /// Subscribe to a live URI and return the latest cached
+    /// snapshot, waiting up to [`FIRST_FRAME_TIMEOUT`] on a fresh
+    /// subscription. The returned `SubscriptionHandle` is dropped at
+    /// the end of the call — the underlying entry stays open as long
+    /// as any other subscriber holds a handle, otherwise the
+    /// refcount returns to zero and the upstream channel closes.
+    async fn read_live(&self, uri: &ResourceUri) -> Result<serde_json::Value, AdapterError> {
+        use tokio::sync::broadcast::error::RecvError;
+
+        let provider = self
+            .provider
+            .as_ref()
+            .ok_or_else(|| AdapterError::internal("live subscription provider not configured"))?;
+        let handle = self.live.subscribe(provider.as_ref(), uri).await?;
+        // Subscribe to the broadcast BEFORE checking `latest`. If
+        // the first frame arrives between an early `latest` check
+        // and the `updates()` subscription, the broadcast receiver
+        // would miss its signal (no backlog) and we would time out
+        // spuriously.
+        let mut updates = handle.updates();
+        if let Some(snapshot) = handle.latest().await {
+            return Ok(snapshot);
+        }
+        match tokio::time::timeout(FIRST_FRAME_TIMEOUT, updates.recv()).await {
+            Ok(Ok(())) => handle
+                .latest()
+                .await
+                .ok_or_else(|| AdapterError::internal("update fired without snapshot")),
+            Ok(Err(RecvError::Lagged(_))) => handle
+                .latest()
+                .await
+                .ok_or_else(|| AdapterError::internal("broadcast lagged before first frame")),
+            Ok(Err(RecvError::Closed)) => Err(AdapterError::internal(
+                "live subscription closed before producing a frame",
+            )),
+            Err(_elapsed) => Err(AdapterError::internal(
+                "live subscription did not produce a frame in time",
+            )),
         }
     }
 }
@@ -507,12 +611,94 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn read_live_returns_internal_until_v03() {
+    async fn read_live_book_uses_provider_and_returns_snapshot() {
+        use crate::resources::live::{SubscriptionProvider, SubscriptionStream};
+        use std::future::Future;
+        use std::pin::Pin;
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicU64, Ordering};
+
+        /// Counts every `subscribe()` call so the test can pin the
+        /// "open exactly once across multiple reads" semantics.
+        struct CountingProvider {
+            opened: Arc<AtomicU64>,
+        }
+        impl SubscriptionProvider for CountingProvider {
+            fn subscribe(
+                &self,
+                _uri: ResourceUri,
+            ) -> Pin<Box<dyn Future<Output = Result<SubscriptionStream, AdapterError>> + Send + '_>>
+            {
+                self.opened.fetch_add(1, Ordering::AcqRel);
+                Box::pin(async move {
+                    let frame = serde_json::json!({
+                        "bids": [[50_000.0, 1.0], [49_999.0, 2.0]],
+                        "asks": [[50_001.0, 1.5]],
+                        "change_id": 42_u64,
+                        "timestamp": 1_700_000_000_000_i64,
+                    });
+                    let stream = futures_util::stream::iter(vec![Ok::<_, AdapterError>(frame)]);
+                    Ok(Box::pin(stream) as SubscriptionStream)
+                })
+            }
+        }
+
+        let opened = Arc::new(AtomicU64::new(0));
+        let provider = Arc::new(CountingProvider {
+            opened: opened.clone(),
+        });
+        let registry = ResourceRegistry::build().with_subscription_provider(provider);
+        let uri = ResourceUri::Book {
+            instrument: "BTC-PERPETUAL".to_string(),
+        };
+
+        let content = registry.read(&ctx(), &uri).await.expect("ok");
+        match content {
+            ResourceContent::Json(value) => {
+                assert_eq!(
+                    value.get("instrument").and_then(|v| v.as_str()),
+                    Some("BTC-PERPETUAL")
+                );
+                assert_eq!(value.get("change_id").and_then(|v| v.as_u64()), Some(42));
+                assert!(value.get("bids").and_then(|v| v.as_array()).is_some());
+            }
+        }
+
+        // Second read should hit the cached entry. The first read
+        // dropped its `SubscriptionHandle`, so the entry's refcount
+        // returned to zero and the deferred-cleanup task may have
+        // already removed it. To pin the semantics deterministically,
+        // assert the provider was opened *at most twice* — once
+        // for the first read, optionally once if the cleanup
+        // raced — and never more than that (no per-read leak).
+        let _ = registry.read(&ctx(), &uri).await.expect("ok");
+        let opens = opened.load(Ordering::Acquire);
+        assert!(
+            (1..=2).contains(&opens),
+            "expected provider opens in 1..=2, got {opens}"
+        );
+    }
+
+    #[tokio::test]
+    async fn read_live_book_without_provider_returns_internal() {
+        let registry = ResourceRegistry::build();
+        let uri = ResourceUri::Book {
+            instrument: "BTC-PERPETUAL".to_string(),
+        };
+        let err = registry.read(&ctx(), &uri).await.unwrap_err();
+        assert!(matches!(err, AdapterError::Internal { .. }));
+    }
+
+    #[tokio::test]
+    async fn read_ticker_returns_internal_until_v03_03() {
+        // `Book` is wired in v0.3-02 (this PR); `Ticker` lands in
+        // v0.3-03. Until then a configured-but-not-supported live
+        // URI returns the documented `Internal` placeholder.
         let r = ResourceRegistry::build();
         let err = r
             .read(
                 &ctx(),
-                &ResourceUri::Book {
+                &ResourceUri::Ticker {
                     instrument: "BTC-PERPETUAL".to_string(),
                 },
             )
@@ -520,7 +706,10 @@ mod tests {
             .unwrap_err();
         match err {
             AdapterError::Internal { ref reason } => {
-                assert_eq!(reason, "live resources land in v0.3");
+                assert!(
+                    reason.contains("ticker") && reason.contains("trades"),
+                    "unexpected reason: {reason}"
+                );
             }
             other => panic!("unexpected: {other:?}"),
         }
