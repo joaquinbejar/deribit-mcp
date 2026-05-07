@@ -345,7 +345,8 @@ fn get_currencies_tool() -> ToolEntry {
     }
 }
 
-async fn handle_get_currencies(ctx: &AdapterContext, _input: Value) -> Result<Value, AdapterError> {
+async fn handle_get_currencies(ctx: &AdapterContext, input: Value) -> Result<Value, AdapterError> {
+    let _: GetCurrenciesInput = parse(input)?;
     let result = ctx.http.get_currencies().await?;
     Ok(serde_json::to_value(&result)?)
 }
@@ -373,10 +374,8 @@ fn get_server_time_tool() -> ToolEntry {
     }
 }
 
-async fn handle_get_server_time(
-    ctx: &AdapterContext,
-    _input: Value,
-) -> Result<Value, AdapterError> {
+async fn handle_get_server_time(ctx: &AdapterContext, input: Value) -> Result<Value, AdapterError> {
+    let _: GetServerTimeInput = parse(input)?;
     let result = ctx.http.get_server_time().await?;
     Ok(serde_json::to_value(result)?)
 }
@@ -403,7 +402,8 @@ fn get_status_tool() -> ToolEntry {
     }
 }
 
-async fn handle_get_status(ctx: &AdapterContext, _input: Value) -> Result<Value, AdapterError> {
+async fn handle_get_status(ctx: &AdapterContext, input: Value) -> Result<Value, AdapterError> {
+    let _: GetStatusInput = parse(input)?;
     let result = ctx.http.get_status().await?;
     Ok(serde_json::to_value(&result)?)
 }
