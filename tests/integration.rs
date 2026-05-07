@@ -841,7 +841,10 @@ async fn cancel_all_by_currency_dispatches_through_registry() {
     });
     let cancel_mock = server
         .mock("GET", "/api/v2/private/cancel_all_by_currency")
-        .match_query(mockito::Matcher::Any)
+        .match_query(mockito::Matcher::UrlEncoded(
+            "currency".into(),
+            "BTC".into(),
+        ))
         .match_header(
             "authorization",
             mockito::Matcher::Regex("^Bearer ".to_string()),
@@ -894,7 +897,10 @@ async fn cancel_all_by_instrument_dispatches_through_registry() {
     });
     let cancel_mock = server
         .mock("GET", "/api/v2/private/cancel_all_by_instrument")
-        .match_query(mockito::Matcher::Any)
+        .match_query(mockito::Matcher::UrlEncoded(
+            "instrument_name".into(),
+            "BTC-PERPETUAL".into(),
+        ))
         .match_header(
             "authorization",
             mockito::Matcher::Regex("^Bearer ".to_string()),

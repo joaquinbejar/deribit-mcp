@@ -524,8 +524,8 @@ async fn handle_cancel_order(ctx: &AdapterContext, input: Value) -> Result<Value
 
 /// `cancel_all_by_currency` input.
 ///
-/// Mass-cancels every open order in the given currency. Use with
-/// care — this is irreversible.
+/// Mass-cancels every open order in the given currency.
+/// Irreversible — use with care.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub struct CancelAllByCurrencyInput {
@@ -537,8 +537,8 @@ fn cancel_all_by_currency_tool() -> ToolEntry {
     let schema = schema_for::<CancelAllByCurrencyInput>();
     let descriptor = Tool::new(
         "cancel_all_by_currency",
-        "Mass-cancel every open order for a currency. Returns the number of orders cancelled. \
-         Irreversible — use with care.",
+        "Mass-cancel every open order for a currency. Returns \
+         {\"cancelled\": <count>}. Irreversible — use with care.",
         schema,
     );
     let handler: ToolHandlerFn =
@@ -569,6 +569,9 @@ async fn handle_cancel_all_by_currency(
 // ----- cancel_all_by_instrument -------------------------------------
 
 /// `cancel_all_by_instrument` input.
+///
+/// Mass-cancels every open order on the given instrument.
+/// Irreversible — use with care.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub struct CancelAllByInstrumentInput {
@@ -580,8 +583,8 @@ fn cancel_all_by_instrument_tool() -> ToolEntry {
     let schema = schema_for::<CancelAllByInstrumentInput>();
     let descriptor = Tool::new(
         "cancel_all_by_instrument",
-        "Mass-cancel every open order on an instrument. Returns the number of orders cancelled. \
-         Irreversible — use with care.",
+        "Mass-cancel every open order on an instrument. Returns \
+         {\"cancelled\": <count>}. Irreversible — use with care.",
         schema,
     );
     let handler: ToolHandlerFn =
