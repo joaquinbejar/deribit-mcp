@@ -6,12 +6,14 @@
 //! - [`live`] — WebSocket-backed subscribable resources, populated in
 //!   v0.3 per ADR-0006.
 //!
-//! v0.1-07 ships the URI parser, the resource catalogue (entries +
-//! templates), and a `read()` dispatch surface. The actual static
-//! reads (`deribit://currencies`, `deribit://instruments/{currency}`)
-//! land in v0.1-12. Live URIs are accepted by the parser but
-//! `read()` returns [`AdapterError::Validation`] until v0.3 wires
-//! them.
+//! v0.1-07 shipped the URI parser, catalogue, and dispatch surface.
+//! v0.1-12 wires the two static reads:
+//! `deribit://currencies` → `static_::read_currencies`,
+//! `deribit://instruments/{currency}` → `static_::read_instruments`.
+//! Live URIs (`book`, `ticker`, `trades`) are accepted by the parser
+//! but `read()` returns
+//! [`AdapterError::Internal { reason: "live resources land in v0.3" }`](AdapterError::Internal)
+//! until v0.3 wires the WebSocket transport.
 
 use rmcp::model::{Annotated, RawResource, RawResourceTemplate, Resource, ResourceTemplate};
 
@@ -245,20 +247,23 @@ impl ResourceRegistry {
         list.templates.push(make_template(
             "deribit://book/{instrument}",
             "Deribit order book (live, v0.3+)",
-            "Live order book for an instrument. Read returns a structured Validation \
-             error (`field: \"uri\"`) until v0.3 wires the WebSocket transport.",
+            "Live order book for an instrument. Read returns \
+             AdapterError::Internal { reason: \"live resources land in v0.3\" } \
+             until v0.3 wires the WebSocket transport.",
         ));
         list.templates.push(make_template(
             "deribit://ticker/{instrument}",
             "Deribit ticker (live, v0.3+)",
-            "Live ticker for an instrument. Read returns a structured Validation \
-             error (`field: \"uri\"`) until v0.3 wires the WebSocket transport.",
+            "Live ticker for an instrument. Read returns \
+             AdapterError::Internal { reason: \"live resources land in v0.3\" } \
+             until v0.3 wires the WebSocket transport.",
         ));
         list.templates.push(make_template(
             "deribit://trades/{instrument}",
             "Deribit last trades (live, v0.3+)",
-            "Live trades for an instrument. Read returns a structured Validation \
-             error (`field: \"uri\"`) until v0.3 wires the WebSocket transport.",
+            "Live trades for an instrument. Read returns \
+             AdapterError::Internal { reason: \"live resources land in v0.3\" } \
+             until v0.3 wires the WebSocket transport.",
         ));
         Self { list }
     }
@@ -289,35 +294,32 @@ impl ResourceRegistry {
 
     /// Read a resource by its parsed URI.
     ///
-    /// v0.1-07 routes:
-    ///
-    /// - Static URIs (`Currencies`, `Instruments`) — returns
-    ///   [`AdapterError::Validation`] with `field = "uri"` and a
-    ///   message saying the static read is wired in v0.1-12. v0.1-12
-    ///   replaces this stub.
-    /// - Live URIs (`Book`, `Ticker`, `Trades`) — returns
-    ///   [`AdapterError::Validation`] with a message saying the live
-    ///   transport is wired in v0.3.
+    /// v0.1-12 routes static URIs (`Currencies`, `Instruments`) to
+    /// [`static_::read_currencies`] / [`static_::read_instruments`].
+    /// Live URIs (`Book`, `Ticker`, `Trades`) return a structured
+    /// [`AdapterError::Internal`] with `reason: "live resources land
+    /// in v0.3"` so the LLM sees a stable error shape — the live
+    /// transport ships in v0.3 (ADR-0006).
     ///
     /// # Errors
     ///
-    /// See above. Once v0.1-12 / v0.3 ship, this returns the
-    /// upstream-mapped [`AdapterError`] from the underlying HTTP /
-    /// WebSocket call.
+    /// Static reads surface whatever upstream HTTP failure the call
+    /// produces (network, rate-limit, API). Live reads return
+    /// [`AdapterError::Internal`] until v0.3 ships.
     pub async fn read(
         &self,
-        _ctx: &AdapterContext,
+        ctx: &AdapterContext,
         uri: &ResourceUri,
     ) -> Result<ResourceContent, AdapterError> {
         match uri {
-            ResourceUri::Currencies | ResourceUri::Instruments { .. } => Err(
-                AdapterError::validation("uri", "static resource read is wired in v0.1-12"),
-            ),
+            ResourceUri::Currencies => {
+                Ok(ResourceContent::Json(static_::read_currencies(ctx).await?))
+            }
+            ResourceUri::Instruments { currency } => Ok(ResourceContent::Json(
+                static_::read_instruments(ctx, currency).await?,
+            )),
             ResourceUri::Book { .. } | ResourceUri::Ticker { .. } | ResourceUri::Trades { .. } => {
-                Err(AdapterError::validation(
-                    "uri",
-                    "live resource read is wired in v0.3",
-                ))
+                Err(AdapterError::internal("live resources land in v0.3"))
             }
         }
     }
@@ -505,14 +507,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn read_static_returns_validation_until_v01_12() {
-        let r = ResourceRegistry::build();
-        let err = r.read(&ctx(), &ResourceUri::Currencies).await.unwrap_err();
-        assert!(matches!(err, AdapterError::Validation { .. }));
-    }
-
-    #[tokio::test]
-    async fn read_live_returns_validation_until_v03() {
+    async fn read_live_returns_internal_until_v03() {
         let r = ResourceRegistry::build();
         let err = r
             .read(
@@ -523,6 +518,11 @@ mod tests {
             )
             .await
             .unwrap_err();
-        assert!(matches!(err, AdapterError::Validation { .. }));
+        match err {
+            AdapterError::Internal { ref reason } => {
+                assert_eq!(reason, "live resources land in v0.3");
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
     }
 }

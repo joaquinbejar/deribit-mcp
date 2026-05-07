@@ -155,11 +155,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     static entry (`deribit://currencies`) plus four templates
     (`instruments/{currency}`, `book/{instrument}`,
     `ticker/{instrument}`, `trades/{instrument}`).
-  - `ResourceRegistry::read()` is the dispatch surface; v0.1-12
-    fills the static reads, v0.3 fills the live reads. Until then
-    every URI returns a structured `Validation` error.
+  - `ResourceRegistry::read()` is the dispatch surface. Behaviour
+    when shipped:
+    - Static reads: every URI returned a structured `Validation`
+      error pointing at v0.1-12.
+    - Live reads: every URI returned a structured `Validation`
+      error pointing at v0.3.
+    Both branches are tightened in subsequent v0.1 issues — see the
+    v0.1-12 bullet below for the static wiring.
 - `DeribitMcpServer::new` now constructs both registries from the
   context (was empty stubs).
+- Static resource reads (`src/resources/static_.rs`):
+  - `read_currencies(ctx)` → upstream `get_currencies()`.
+  - `read_instruments(ctx, currency)` → upstream
+    `get_instruments(currency, None, None)` (kind unfiltered, expired
+    excluded).
+  - Wired into `ResourceRegistry::read`:
+    `Currencies` / `Instruments` route to the upstream HTTP call;
+    live URIs (`Book`, `Ticker`, `Trades`) return
+    `AdapterError::Internal { reason: "live resources land in v0.3" }`
+    so the LLM sees a stable error shape until v0.3 ships.
+  - Live-template descriptions and module docs updated to match the
+    new error shape.
 - stdio transport wiring (`src/main.rs`):
   - Async `tokio::main` runtime; `Config::load` →
     `observability::init` → `AdapterContext::new` →
