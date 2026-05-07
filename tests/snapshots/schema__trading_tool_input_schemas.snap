@@ -2,6 +2,73 @@
 source: tests/schema.rs
 expression: schemas
 ---
+- - cancel_order
+  - $schema: "https://json-schema.org/draft/2020-12/schema"
+    description: "`cancel_order` input."
+    properties:
+      order_id:
+        description: "Order id returned from `place_order`."
+        type: string
+    required:
+      - order_id
+    title: CancelOrderInput
+    type: object
+- - edit_order
+  - $schema: "https://json-schema.org/draft/2020-12/schema"
+    description: "`edit_order` input.\n\nModifies an existing order identified by `order_id`. All other\nfields are optional — `None` means \"leave the existing value\nunchanged upstream\"."
+    properties:
+      amount:
+        description: "New amount. Finite, `> 0` if supplied."
+        format: double
+        type:
+          - number
+          - "null"
+      mmp:
+        description: Toggle Market-Maker Protection.
+        type:
+          - boolean
+          - "null"
+      order_id:
+        description: "Order id returned from `place_order`."
+        type: string
+      post_only:
+        description: Toggle post-only.
+        type:
+          - boolean
+          - "null"
+      price:
+        description: "New limit price. Finite, `> 0` if supplied."
+        format: double
+        type:
+          - number
+          - "null"
+      reduce_only:
+        description: Toggle reduce-only.
+        type:
+          - boolean
+          - "null"
+      reject_post_only:
+        description: "`reject_post_only` — reject (vs. amend) when `post_only`\nwould otherwise be relaxed."
+        type:
+          - boolean
+          - "null"
+      trigger_price:
+        description: "New trigger price for stop / take orders. Finite, `> 0` if\nsupplied."
+        format: double
+        type:
+          - number
+          - "null"
+      valid_until:
+        description: "Server-side TTL (Unix-ms). `None` keeps the existing value."
+        format: uint64
+        minimum: 0
+        type:
+          - integer
+          - "null"
+    required:
+      - order_id
+    title: EditOrderInput
+    type: object
 - - place_order
   - $defs:
       PlaceOrderType:

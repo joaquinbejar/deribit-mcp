@@ -9,6 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `edit_order` and `cancel_order` Trading-class tools (v0.4-02):
+  - `edit_order` modifies `amount`, `price`, `post_only`,
+    `reject_post_only`, `reduce_only`, `mmp`, `valid_until`,
+    `trigger_price` of an existing order identified by
+    `order_id`. All non-`order_id` fields are optional — `None`
+    leaves the upstream value unchanged. Backed by
+    `deribit_http::edit_order`. Validates non-empty `order_id`
+    and finite-positive `amount` / `price` / `trigger_price`
+    when supplied.
+  - `cancel_order` cancels one open order by id. Backed by
+    `deribit_http::cancel_order`. Rejects empty / whitespace
+    `order_id` with `AdapterError::Validation`.
+  - Both tools effect-class `Trading`; register only when
+    credentials are configured AND `--allow-trading` is set.
+  - Trading schema snapshot
+    `tests/snapshots/schema__trading_tool_input_schemas.snap`
+    extended with the new entries; integration tests cover the
+    happy path against `mockito` + the validation-before-network
+    failure mode for empty `order_id`. Upstream `OrderNotFound`
+    surfaces verbatim through the existing
+    `From<HttpError> for AdapterError` mapping (already covered
+    by the v0.2 error-mapping unit tests).
+
 - `place_order` Trading-class tool (v0.4-01):
   - Buy / sell with the full Deribit order parameter surface
     (`limit`, `market`, `stop_limit`, `stop_market`, `take_limit`,

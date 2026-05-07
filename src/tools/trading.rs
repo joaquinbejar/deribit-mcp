@@ -29,6 +29,8 @@ use crate::error::AdapterError;
 /// Register every `Trading` tool with the registry.
 pub fn register(registry: &mut ToolRegistry) {
     registry.insert(place_order_tool());
+    registry.insert(edit_order_tool());
+    registry.insert(cancel_order_tool());
 }
 
 // ----- place_order ---------------------------------------------------
@@ -324,6 +326,198 @@ fn build_order_request(
     Ok((input.side, req))
 }
 
+// ----- edit_order ---------------------------------------------------
+
+/// `edit_order` input.
+///
+/// Modifies an existing order identified by `order_id`. All other
+/// fields are optional — `None` means "leave the existing value
+/// unchanged upstream".
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub struct EditOrderInput {
+    /// Order id returned from `place_order`.
+    pub order_id: String,
+    /// New amount. Finite, `> 0` if supplied.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub amount: Option<f64>,
+    /// New limit price. Finite, `> 0` if supplied.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub price: Option<f64>,
+    /// Toggle post-only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub post_only: Option<bool>,
+    /// `reject_post_only` — reject (vs. amend) when `post_only`
+    /// would otherwise be relaxed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reject_post_only: Option<bool>,
+    /// Toggle reduce-only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reduce_only: Option<bool>,
+    /// Toggle Market-Maker Protection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mmp: Option<bool>,
+    /// Server-side TTL (Unix-ms). `None` keeps the existing value.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub valid_until: Option<u64>,
+    /// New trigger price for stop / take orders. Finite, `> 0` if
+    /// supplied.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trigger_price: Option<f64>,
+}
+
+fn edit_order_tool() -> ToolEntry {
+    let schema = schema_for::<EditOrderInput>();
+    let descriptor = Tool::new(
+        "edit_order",
+        "Modify amount / price / trigger_price / valid_until / flags (post_only, \
+         reject_post_only, reduce_only, mmp) of an open order.",
+        schema,
+    );
+    let handler: ToolHandlerFn = Arc::new(|ctx, input| Box::pin(handle_edit_order(ctx, input)));
+    ToolEntry {
+        descriptor,
+        class: ToolClass::Trading,
+        handler,
+    }
+}
+
+async fn handle_edit_order(ctx: &AdapterContext, input: Value) -> Result<Value, AdapterError> {
+    let mut input: EditOrderInput = parse(input)?;
+    validate_edit_order(&input)?;
+    // Forward the trimmed id — leading / trailing whitespace would
+    // surface as an opaque upstream `OrderNotFound`.
+    input.order_id = input.order_id.trim().to_string();
+    let request = build_edit_request(input)?;
+    let result = ctx.http.edit_order(request).await?;
+    Ok(serde_json::to_value(&result)?)
+}
+
+fn validate_edit_order(input: &EditOrderInput) -> Result<(), AdapterError> {
+    if input.order_id.trim().is_empty() {
+        return Err(AdapterError::Validation {
+            field: "order_id".to_string(),
+            message: "must be non-empty".to_string(),
+        });
+    }
+    let any_edit = input.amount.is_some()
+        || input.price.is_some()
+        || input.post_only.is_some()
+        || input.reject_post_only.is_some()
+        || input.reduce_only.is_some()
+        || input.mmp.is_some()
+        || input.valid_until.is_some()
+        || input.trigger_price.is_some();
+    if !any_edit {
+        return Err(AdapterError::Validation {
+            field: "arguments".to_string(),
+            message: "at least one editable field must be present (amount, price, post_only, \
+                      reject_post_only, reduce_only, mmp, valid_until, trigger_price)"
+                .to_string(),
+        });
+    }
+    if let Some(amount) = input.amount
+        && (!amount.is_finite() || amount <= 0.0)
+    {
+        return Err(AdapterError::Validation {
+            field: "amount".to_string(),
+            message: format!("must be finite and > 0, got {amount}"),
+        });
+    }
+    if let Some(price) = input.price
+        && (!price.is_finite() || price <= 0.0)
+    {
+        return Err(AdapterError::Validation {
+            field: "price".to_string(),
+            message: format!("must be finite and > 0, got {price}"),
+        });
+    }
+    if let Some(tp) = input.trigger_price
+        && (!tp.is_finite() || tp <= 0.0)
+    {
+        return Err(AdapterError::Validation {
+            field: "trigger_price".to_string(),
+            message: format!("must be finite and > 0, got {tp}"),
+        });
+    }
+    Ok(())
+}
+
+fn build_edit_request(
+    input: EditOrderInput,
+) -> Result<deribit_http::model::request::OrderRequest, AdapterError> {
+    use deribit_http::model::request::OrderRequest;
+
+    let valid_until = match input.valid_until {
+        None => None,
+        Some(v) => Some(i64::try_from(v).map_err(|_| AdapterError::Validation {
+            field: "valid_until".to_string(),
+            message: format!("must fit in i64, got {v}"),
+        })?),
+    };
+    Ok(OrderRequest {
+        order_id: Some(input.order_id),
+        // `instrument_name` is unused by the upstream `edit_order`
+        // path, but the struct field is non-optional. The empty
+        // string round-trips harmlessly because `edit_order` only
+        // serialises the fields it needs.
+        instrument_name: String::new(),
+        amount: input.amount,
+        contracts: None,
+        type_: None,
+        label: None,
+        price: input.price,
+        time_in_force: None,
+        display_amount: None,
+        post_only: input.post_only,
+        reject_post_only: input.reject_post_only,
+        reduce_only: input.reduce_only,
+        trigger_price: input.trigger_price,
+        trigger_offset: None,
+        trigger: None,
+        advanced: None,
+        mmp: input.mmp,
+        valid_until,
+        linked_order_type: None,
+        trigger_fill_condition: None,
+        otoco_config: None,
+    })
+}
+
+// ----- cancel_order -------------------------------------------------
+
+/// `cancel_order` input.
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub struct CancelOrderInput {
+    /// Order id returned from `place_order`.
+    pub order_id: String,
+}
+
+fn cancel_order_tool() -> ToolEntry {
+    let schema = schema_for::<CancelOrderInput>();
+    let descriptor = Tool::new("cancel_order", "Cancel one open order by its id.", schema);
+    let handler: ToolHandlerFn = Arc::new(|ctx, input| Box::pin(handle_cancel_order(ctx, input)));
+    ToolEntry {
+        descriptor,
+        class: ToolClass::Trading,
+        handler,
+    }
+}
+
+async fn handle_cancel_order(ctx: &AdapterContext, input: Value) -> Result<Value, AdapterError> {
+    let input: CancelOrderInput = parse(input)?;
+    let order_id = input.order_id.trim();
+    if order_id.is_empty() {
+        return Err(AdapterError::Validation {
+            field: "order_id".to_string(),
+            message: "must be non-empty".to_string(),
+        });
+    }
+    let result = ctx.http.cancel_order(order_id).await?;
+    Ok(serde_json::to_value(&result)?)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -431,6 +625,82 @@ mod tests {
         let mut input = limit_input();
         input.valid_until = Some(u64::MAX);
         let err = build_order_request(input).unwrap_err();
+        assert!(
+            matches!(err, AdapterError::Validation { ref field, .. } if field == "valid_until")
+        );
+    }
+
+    fn edit_input() -> EditOrderInput {
+        EditOrderInput {
+            order_id: "ORDER-1".to_string(),
+            amount: Some(20.0),
+            price: Some(51_000.0),
+            post_only: None,
+            reject_post_only: None,
+            reduce_only: None,
+            mmp: None,
+            valid_until: None,
+            trigger_price: None,
+        }
+    }
+
+    #[test]
+    fn edit_empty_order_id_rejected() {
+        let mut input = edit_input();
+        input.order_id = "  ".to_string();
+        let err = validate_edit_order(&input).unwrap_err();
+        assert!(matches!(err, AdapterError::Validation { ref field, .. } if field == "order_id"));
+    }
+
+    #[test]
+    fn edit_negative_amount_rejected() {
+        let mut input = edit_input();
+        input.amount = Some(-1.0);
+        let err = validate_edit_order(&input).unwrap_err();
+        assert!(matches!(err, AdapterError::Validation { ref field, .. } if field == "amount"));
+    }
+
+    #[test]
+    fn edit_nan_price_rejected() {
+        let mut input = edit_input();
+        input.price = Some(f64::NAN);
+        let err = validate_edit_order(&input).unwrap_err();
+        assert!(matches!(err, AdapterError::Validation { ref field, .. } if field == "price"));
+    }
+
+    #[test]
+    fn edit_partial_input_accepted() {
+        let mut input = edit_input();
+        input.price = None;
+        validate_edit_order(&input).unwrap();
+        let req = build_edit_request(input).unwrap();
+        assert_eq!(req.order_id.as_deref(), Some("ORDER-1"));
+        assert_eq!(req.amount, Some(20.0));
+        assert_eq!(req.price, None);
+    }
+
+    #[test]
+    fn edit_no_fields_rejected() {
+        let input = EditOrderInput {
+            order_id: "ORDER-1".to_string(),
+            amount: None,
+            price: None,
+            post_only: None,
+            reject_post_only: None,
+            reduce_only: None,
+            mmp: None,
+            valid_until: None,
+            trigger_price: None,
+        };
+        let err = validate_edit_order(&input).unwrap_err();
+        assert!(matches!(err, AdapterError::Validation { ref field, .. } if field == "arguments"));
+    }
+
+    #[test]
+    fn edit_valid_until_overflow_rejected() {
+        let mut input = edit_input();
+        input.valid_until = Some(u64::MAX);
+        let err = build_edit_request(input).unwrap_err();
         assert!(
             matches!(err, AdapterError::Validation { ref field, .. } if field == "valid_until")
         );
