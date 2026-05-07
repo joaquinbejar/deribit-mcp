@@ -809,3 +809,119 @@ async fn cancel_order_empty_id_rejected() {
         other => panic!("unexpected: {other:?}"),
     }
 }
+
+#[tokio::test]
+async fn cancel_all_by_currency_dispatches_through_registry() {
+    let mut server = mockito::Server::new_async().await;
+    let auth_body = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 0,
+        "result": {
+            "access_token": "test-access",
+            "expires_in": 900,
+            "refresh_token": "test-refresh",
+            "scope": "session:test",
+            "token_type": "Bearer"
+        }
+    });
+    server
+        .mock("GET", "/api/v2/public/auth")
+        .match_query(mockito::Matcher::Any)
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(auth_body.to_string())
+        .expect_at_least(1)
+        .create_async()
+        .await;
+
+    let cancel_body = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 0,
+        "result": 5
+    });
+    let cancel_mock = server
+        .mock("GET", "/api/v2/private/cancel_all_by_currency")
+        .match_query(mockito::Matcher::UrlEncoded(
+            "currency".into(),
+            "BTC".into(),
+        ))
+        .match_header(
+            "authorization",
+            mockito::Matcher::Regex("^Bearer ".to_string()),
+        )
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(cancel_body.to_string())
+        .expect(1)
+        .create_async()
+        .await;
+
+    let ctx = ctx_with_mock_creds(&server.url(), true, true);
+    let registry = ToolRegistry::build(&ctx);
+    let out = registry
+        .call(&ctx, "cancel_all_by_currency", json!({"currency": "BTC"}))
+        .await
+        .expect("ok");
+    assert_eq!(out["cancelled"].as_u64(), Some(5));
+    cancel_mock.assert_async().await;
+}
+
+#[tokio::test]
+async fn cancel_all_by_instrument_dispatches_through_registry() {
+    let mut server = mockito::Server::new_async().await;
+    let auth_body = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 0,
+        "result": {
+            "access_token": "test-access",
+            "expires_in": 900,
+            "refresh_token": "test-refresh",
+            "scope": "session:test",
+            "token_type": "Bearer"
+        }
+    });
+    server
+        .mock("GET", "/api/v2/public/auth")
+        .match_query(mockito::Matcher::Any)
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(auth_body.to_string())
+        .expect_at_least(1)
+        .create_async()
+        .await;
+
+    let cancel_body = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 0,
+        "result": 0
+    });
+    let cancel_mock = server
+        .mock("GET", "/api/v2/private/cancel_all_by_instrument")
+        .match_query(mockito::Matcher::UrlEncoded(
+            "instrument_name".into(),
+            "BTC-PERPETUAL".into(),
+        ))
+        .match_header(
+            "authorization",
+            mockito::Matcher::Regex("^Bearer ".to_string()),
+        )
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(cancel_body.to_string())
+        .expect(1)
+        .create_async()
+        .await;
+
+    let ctx = ctx_with_mock_creds(&server.url(), true, true);
+    let registry = ToolRegistry::build(&ctx);
+    let out = registry
+        .call(
+            &ctx,
+            "cancel_all_by_instrument",
+            json!({"instrument_name": "BTC-PERPETUAL"}),
+        )
+        .await
+        .expect("ok");
+    assert_eq!(out["cancelled"].as_u64(), Some(0));
+    cancel_mock.assert_async().await;
+}
