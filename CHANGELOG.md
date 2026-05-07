@@ -193,13 +193,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `initialize` request, asserts the response shape (protocol version,
   serverInfo, capabilities), and verifies graceful EOF shutdown.
 - Container packaging (`Dockerfile`, `.dockerignore`) per ADR-0011:
-  - Multi-stage build: `rust:1-slim` builder → distroless
-    `gcr.io/distroless/cc-debian12:nonroot` runtime.
-  - Builder layer compiles `cargo build --release --locked --bin deribit-mcp`
-    after the OS pulls only `pkg-config`, `libssl-dev`, and
-    `ca-certificates` (then prunes apt lists in the same layer).
-  - Manifests copied first so a code-only change reuses the cached
-    dependency build layer.
+  - Multi-stage build: `rust:1.85-slim-bookworm` builder pinned to
+    MSRV → distroless `gcr.io/distroless/cc-debian12:nonroot`
+    runtime.
+  - Builder pulls `ca-certificates`, `cmake`, `perl`, and
+    `pkg-config` (the last three are required by `aws-lc-sys` from
+    the rustls / `deribit-websocket` `rustls-aws-lc` feature). No
+    `libssl-dev` — the dep graph is Rustls-based; `openssl-sys` is
+    not in `Cargo.lock`.
+  - BuildKit cache mounts on `~/.cargo/registry`, `~/.cargo/git`,
+    and `target/` so a code-only edit reuses the warm registry +
+    incremental target dir; the binary is copied out of the target
+    cache before the layer closes.
   - Runtime stage runs as `nonroot:nonroot`, `EXPOSE 8723`, default
     CMD = `--transport=http --listen=0.0.0.0:8723` (testnet by
     default, ADR-0009).
