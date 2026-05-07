@@ -9,6 +9,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Reconnect / resume integration tests (`tests/integration_live.rs`)
+  — v0.3-07:
+  - `MockWsServer::subscribe_count()` /
+    `MockWsServer::unsubscribe_count()` — atomic counters so
+    tests can assert the upstream observed exactly N
+    `public/subscribe` / `public/unsubscribe` calls across the
+    session.
+  - `MockWsServer::shutdown()` — fires the cancellation token so
+    the listener stops accepting new connections and active
+    per-connection tasks send a close frame within a few ms;
+    deterministic trigger for reconnect-style scenarios.
+  - Four scenarios in `tests/integration_live.rs`:
+    `one_client_one_subscribe` (scenario 1 — exactly one
+    upstream subscribe per first read),
+    `two_clients_each_send_their_own_subscribe` (scenario 2 — two
+    distinct WS connections each subscribe once),
+    `explicit_unsubscribe_increments_unsubscribe_count` (scenario
+    3 — explicit unsubscribe surfaces on the mock),
+    `mock_shutdown_terminates_client_stream` (scenario 4 — mock
+    shutdown ends the client stream within 2 s, the trigger a
+    real `WsSubscriptionProvider` would reconnect on).
+  - LiveRegistry-level refcount-reuse / refcount-teardown
+    semantics (scenarios 2 & 3 of the issue brief at the
+    adapter layer) remain covered by the lib-level
+    `second_subscribe_reuses_entry` /
+    `dropping_last_handle_removes_entry` tests in
+    `src/resources/live.rs`. Scenarios 5 & 6 — resume
+    notifications across reconnect and `SubscriptionLost`
+    surfacing — are deferred until the real
+    `WsSubscriptionProvider` over `deribit-websocket` lands;
+    the mock-side trigger from scenario 4 is the contract they
+    will be written against.
+
 - Mock WebSocket server (`tests/support/mock_ws.rs`) — v0.3-06:
   - `MockWsServer::start()` binds an ephemeral `127.0.0.1:0` port
     and accepts WS upgrades. `ws_url()` returns the

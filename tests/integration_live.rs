@@ -156,3 +156,119 @@ where
     }
     None
 }
+
+/// Scenario 1 — first subscribe goes to the mock exactly once.
+#[tokio::test]
+async fn one_client_one_subscribe() {
+    let mock = MockWsServer::start().await;
+    let (ws, _) = connect_async(mock.ws_url()).await.expect("connect");
+    let (mut tx, mut rx) = ws.split();
+    let sub = json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "public/subscribe",
+        "params": { "channels": ["book.BTC-PERPETUAL.raw"] }
+    });
+    tx.send(Message::Text(sub.to_string().into()))
+        .await
+        .unwrap();
+    let _ack = recv_text(&mut rx).await.expect("ack");
+    assert_eq!(mock.subscribe_count(), 1);
+    assert_eq!(mock.unsubscribe_count(), 0);
+}
+
+/// Scenario 2 — two distinct WS connections each subscribe once;
+/// the mock observes two subscribes (one per connection). The
+/// LiveRegistry-level "two MCP subscribers reuse one upstream
+/// subscription" property is covered by the lib-level
+/// `second_subscribe_reuses_entry` test in `src/resources/live.rs`.
+#[tokio::test]
+async fn two_clients_each_send_their_own_subscribe() {
+    let mock = MockWsServer::start().await;
+    for i in 0..2 {
+        let (ws, _) = connect_async(mock.ws_url()).await.expect("connect");
+        let (mut tx, mut rx) = ws.split();
+        let sub = json!({
+            "jsonrpc": "2.0",
+            "id": i,
+            "method": "public/subscribe",
+            "params": { "channels": ["book.BTC-PERPETUAL.raw"] }
+        });
+        tx.send(Message::Text(sub.to_string().into()))
+            .await
+            .unwrap();
+        let _ack = recv_text(&mut rx).await.expect("ack");
+    }
+    // Give the second connection's task a beat to bump the counter.
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    assert_eq!(mock.subscribe_count(), 2);
+}
+
+/// Scenario 3 — explicit unsubscribe surfaces on the mock.
+#[tokio::test]
+async fn explicit_unsubscribe_increments_unsubscribe_count() {
+    let mock = MockWsServer::start().await;
+    let (ws, _) = connect_async(mock.ws_url()).await.expect("connect");
+    let (mut tx, mut rx) = ws.split();
+    tx.send(Message::Text(
+        json!({"jsonrpc":"2.0","id":1,"method":"public/subscribe","params":{"channels":["t.X.raw"]}})
+            .to_string()
+            .into(),
+    ))
+    .await
+    .unwrap();
+    let _ = recv_text(&mut rx).await;
+    tx.send(Message::Text(
+        json!({"jsonrpc":"2.0","id":2,"method":"public/unsubscribe","params":{"channels":["t.X.raw"]}})
+            .to_string()
+            .into(),
+    ))
+    .await
+    .unwrap();
+    let _ = recv_text(&mut rx).await;
+    assert_eq!(mock.subscribe_count(), 1);
+    assert_eq!(mock.unsubscribe_count(), 1);
+}
+
+/// Scenario 4 — the mock shuts the listener down, the client's
+/// stream ends with a close frame. A real `WsSubscriptionProvider`
+/// would respond with a reconnect + re-subscribe; this test pins
+/// the *observable shutdown* signal end-to-end so the reconnect
+/// implementation in `deribit-websocket` (or a future adapter
+/// wrapper) has a deterministic trigger to test against.
+#[tokio::test]
+async fn mock_shutdown_terminates_client_stream() {
+    let mock = MockWsServer::start().await;
+    let url = mock.ws_url();
+    let (ws, _) = connect_async(&url).await.expect("connect");
+    let (mut tx, mut rx) = ws.split();
+    tx.send(Message::Text(
+        json!({"jsonrpc":"2.0","id":1,"method":"public/subscribe","params":{"channels":["t.X.raw"]}})
+            .to_string()
+            .into(),
+    ))
+    .await
+    .unwrap();
+    let _ = recv_text(&mut rx).await; // ack
+
+    mock.shutdown();
+
+    // Within a short window the per-connection task observes the
+    // cancel, sends `close`, and the client stream ends.
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    let mut ended = false;
+    while std::time::Instant::now() < deadline {
+        match tokio::time::timeout(Duration::from_millis(100), rx.next()).await {
+            Ok(Some(Ok(Message::Close(_)))) | Ok(None) => {
+                ended = true;
+                break;
+            }
+            Ok(Some(Err(_))) => {
+                ended = true;
+                break;
+            }
+            _ => continue,
+        }
+    }
+    assert!(ended, "client stream should end after server shutdown");
+}
