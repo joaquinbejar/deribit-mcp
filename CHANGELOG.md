@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Live resource — `deribit://ticker/{instrument}` (v0.3-03):
+  - `TickerSnapshot` DTO carrying `mark_price`, `index_price`,
+    `best_bid_price`, `best_ask_price`, `last_price`, `mark_iv`,
+    `delta`, `gamma`, `vega`, `timestamp`. Optional fields stay
+    `None` when the upstream omits them — perpetuals / futures
+    do not carry the greeks.
+  - `TickerSnapshot::from_value(instrument, raw)` decoder unwraps
+    the inner `greeks` object (delta / gamma / vega) up to the
+    top-level shape so the JSON the LLM sees is flat.
+  - `ResourceRegistry::read(Ticker)` reuses the v0.3-02 live
+    plumbing (subscribe → first-frame timeout → decode →
+    return).
+  - `Trades` placeholder reason adjusted to point at v0.3-04.
 - Live resource — `deribit://book/{instrument}` (v0.3-02):
   - `BookSnapshot` DTO (`instrument`, `bids`, `asks`, `change_id`,
     `timestamp`) with permissive

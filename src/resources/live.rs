@@ -378,6 +378,89 @@ impl BookSnapshot {
     }
 }
 
+/// Ticker snapshot exposed via `deribit://ticker/{instrument}`.
+///
+/// Mirrors the throttled `ticker.<instrument>.100ms` Deribit
+/// WebSocket channel payload. Optional fields stay `None` when the
+/// upstream omits them — perpetuals / futures do not carry the
+/// greeks; spot may not carry `mark_price`.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub struct TickerSnapshot {
+    /// Instrument identifier.
+    pub instrument: String,
+    /// Mark price (perp / future / option).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mark_price: Option<f64>,
+    /// Underlying index price.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub index_price: Option<f64>,
+    /// Best bid price on the order book.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub best_bid_price: Option<f64>,
+    /// Best ask price on the order book.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub best_ask_price: Option<f64>,
+    /// Last traded price.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_price: Option<f64>,
+    /// Mark implied volatility (options only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mark_iv: Option<f64>,
+    /// Black-Scholes delta (options only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delta: Option<f64>,
+    /// Black-Scholes gamma (options only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gamma: Option<f64>,
+    /// Black-Scholes vega (options only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vega: Option<f64>,
+    /// Snapshot timestamp, Unix epoch milliseconds. `None` when
+    /// the upstream omits it (rare in practice — the documented
+    /// channel always sets a timestamp — but a permissive decoder
+    /// is safer than a fabricated `0`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timestamp: Option<i64>,
+}
+
+impl TickerSnapshot {
+    /// Decode an upstream `ticker.<instrument>.100ms` WS frame
+    /// payload. Permissive — every numeric field is optional and
+    /// upstream omissions become `None` (including `timestamp`).
+    ///
+    /// **Greeks** (`delta`, `gamma`, `vega`) live inside an inner
+    /// `greeks` object on options frames; this decoder pulls them
+    /// up to the top level so the JSON shape the LLM sees is flat.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AdapterError::Validation`] only when the payload
+    /// is not a JSON object.
+    pub fn from_value(instrument: &str, value: &Value) -> Result<Self, AdapterError> {
+        let obj = value
+            .as_object()
+            .ok_or_else(|| AdapterError::validation("ticker", "expected JSON object"))?;
+        let f64_at = |key: &str| obj.get(key).and_then(Value::as_f64);
+        let timestamp = obj.get("timestamp").and_then(Value::as_i64);
+        let greeks = obj.get("greeks").and_then(Value::as_object);
+        let greek = |key: &str| greeks.and_then(|g| g.get(key)).and_then(Value::as_f64);
+        Ok(Self {
+            instrument: instrument.to_string(),
+            mark_price: f64_at("mark_price"),
+            index_price: f64_at("index_price"),
+            best_bid_price: f64_at("best_bid_price"),
+            best_ask_price: f64_at("best_ask_price"),
+            last_price: f64_at("last_price"),
+            mark_iv: f64_at("mark_iv"),
+            delta: greek("delta"),
+            gamma: greek("gamma"),
+            vega: greek("vega"),
+            timestamp,
+        })
+    }
+}
+
 /// Decode a side of the order book — Deribit emits each level as
 /// `[op, price, size]` (delta) or `[price, size]` (snapshot). We
 /// keep only `(price, size)` and discard the operation marker; the

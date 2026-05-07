@@ -31,7 +31,7 @@ use crate::error::AdapterError;
 pub mod live;
 pub mod static_;
 
-use live::{BookSnapshot, LiveRegistry, SubscriptionProvider};
+use live::{BookSnapshot, LiveRegistry, SubscriptionProvider, TickerSnapshot};
 
 /// Strongly-typed `deribit://` URI variants.
 ///
@@ -309,9 +309,11 @@ impl ResourceRegistry {
         ));
         list.templates.push(make_template(
             "deribit://ticker/{instrument}",
-            "Deribit ticker (live, v0.3-03+)",
-            "Live ticker for an instrument. Wired in v0.3-03; \
-             current read returns AdapterError::Internal.",
+            "Deribit ticker (live)",
+            "Throttled ticker snapshots from the \
+             `ticker.<instrument>.100ms` channel. Read returns the \
+             latest TickerSnapshot when a SubscriptionProvider is \
+             configured; otherwise AdapterError::Internal.",
         ));
         list.templates.push(make_template(
             "deribit://trades/{instrument}",
@@ -381,9 +383,14 @@ impl ResourceRegistry {
                 let book = BookSnapshot::from_value(instrument, &value)?;
                 Ok(ResourceContent::Json(serde_json::to_value(&book)?))
             }
-            ResourceUri::Ticker { .. } | ResourceUri::Trades { .. } => Err(AdapterError::internal(
-                "live ticker / trades land in v0.3-03 / v0.3-04",
-            )),
+            ResourceUri::Ticker { instrument } => {
+                let value = self.read_live(uri).await?;
+                let ticker = TickerSnapshot::from_value(instrument, &value)?;
+                Ok(ResourceContent::Json(serde_json::to_value(&ticker)?))
+            }
+            ResourceUri::Trades { .. } => {
+                Err(AdapterError::internal("live trades land in v0.3-04"))
+            }
         }
     }
 
@@ -690,15 +697,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn read_ticker_returns_internal_until_v03_03() {
-        // `Book` is wired in v0.3-02 (this PR); `Ticker` lands in
-        // v0.3-03. Until then a configured-but-not-supported live
-        // URI returns the documented `Internal` placeholder.
+    async fn read_trades_returns_internal_until_v03_04() {
+        // `Book` (v0.3-02) and `Ticker` (v0.3-03) are wired;
+        // `Trades` lands in v0.3-04 and still returns the
+        // documented `Internal` placeholder.
         let r = ResourceRegistry::build();
         let err = r
             .read(
                 &ctx(),
-                &ResourceUri::Ticker {
+                &ResourceUri::Trades {
                     instrument: "BTC-PERPETUAL".to_string(),
                 },
             )
@@ -706,12 +713,107 @@ mod tests {
             .unwrap_err();
         match err {
             AdapterError::Internal { ref reason } => {
-                assert!(
-                    reason.contains("ticker") && reason.contains("trades"),
-                    "unexpected reason: {reason}"
-                );
+                assert!(reason.contains("trades"), "unexpected reason: {reason}");
             }
             other => panic!("unexpected: {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn read_live_ticker_uses_provider_and_returns_snapshot_with_greeks() {
+        use crate::resources::live::{SubscriptionProvider, SubscriptionStream};
+        use std::future::Future;
+        use std::pin::Pin;
+        use std::sync::Arc;
+
+        struct StubProvider;
+        impl SubscriptionProvider for StubProvider {
+            fn subscribe(
+                &self,
+                _uri: ResourceUri,
+            ) -> Pin<Box<dyn Future<Output = Result<SubscriptionStream, AdapterError>> + Send + '_>>
+            {
+                Box::pin(async move {
+                    let frame = serde_json::json!({
+                        "mark_price": 50_000.5,
+                        "index_price": 50_010.0,
+                        "best_bid_price": 50_000.0,
+                        "best_ask_price": 50_001.0,
+                        "last_price": 49_999.5,
+                        "mark_iv": 65.0,
+                        "greeks": {
+                            "delta": 0.55,
+                            "gamma": 0.0001,
+                            "vega": 12.3,
+                            "theta": -0.4,
+                            "rho": 0.05
+                        },
+                        "timestamp": 1_700_000_000_000_i64,
+                    });
+                    let stream = futures_util::stream::iter(vec![Ok::<_, AdapterError>(frame)]);
+                    Ok(Box::pin(stream) as SubscriptionStream)
+                })
+            }
+        }
+
+        let registry = ResourceRegistry::build().with_subscription_provider(Arc::new(StubProvider));
+        let uri = ResourceUri::Ticker {
+            instrument: "BTC-31MAY24-50000-C".to_string(),
+        };
+        let content = registry.read(&ctx(), &uri).await.expect("ok");
+        let ResourceContent::Json(value) = content;
+        assert_eq!(
+            value.get("instrument").and_then(|v| v.as_str()),
+            Some("BTC-31MAY24-50000-C")
+        );
+        assert_eq!(
+            value.get("mark_price").and_then(|v| v.as_f64()),
+            Some(50_000.5)
+        );
+        assert_eq!(value.get("delta").and_then(|v| v.as_f64()), Some(0.55));
+        assert_eq!(value.get("gamma").and_then(|v| v.as_f64()), Some(0.0001));
+        assert_eq!(value.get("vega").and_then(|v| v.as_f64()), Some(12.3));
+    }
+
+    #[tokio::test]
+    async fn read_live_ticker_perp_omits_greeks() {
+        use crate::resources::live::{SubscriptionProvider, SubscriptionStream};
+        use std::future::Future;
+        use std::pin::Pin;
+        use std::sync::Arc;
+
+        struct StubProvider;
+        impl SubscriptionProvider for StubProvider {
+            fn subscribe(
+                &self,
+                _uri: ResourceUri,
+            ) -> Pin<Box<dyn Future<Output = Result<SubscriptionStream, AdapterError>> + Send + '_>>
+            {
+                Box::pin(async move {
+                    let frame = serde_json::json!({
+                        "mark_price": 50_000.5,
+                        "best_bid_price": 50_000.0,
+                        "best_ask_price": 50_001.0,
+                        "last_price": 49_999.5,
+                        "timestamp": 1_700_000_000_000_i64,
+                    });
+                    let stream = futures_util::stream::iter(vec![Ok::<_, AdapterError>(frame)]);
+                    Ok(Box::pin(stream) as SubscriptionStream)
+                })
+            }
+        }
+
+        let registry = ResourceRegistry::build().with_subscription_provider(Arc::new(StubProvider));
+        let uri = ResourceUri::Ticker {
+            instrument: "BTC-PERPETUAL".to_string(),
+        };
+        let content = registry.read(&ctx(), &uri).await.expect("ok");
+        let ResourceContent::Json(value) = content;
+        // `skip_serializing_if = "Option::is_none"` keeps absent
+        // fields out of the JSON payload entirely.
+        assert!(value.get("delta").is_none());
+        assert!(value.get("gamma").is_none());
+        assert!(value.get("vega").is_none());
+        assert!(value.get("mark_iv").is_none());
     }
 }
