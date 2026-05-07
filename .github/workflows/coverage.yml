@@ -24,6 +24,14 @@ jobs:
     name: cargo-tarpaulin → Codecov
     runs-on: ubuntu-24.04
     timeout-minutes: 25
+    # Codecov v5 prefers OIDC over a static `CODECOV_TOKEN`; the
+    # action mints an ID token via `actions/github-script`, which
+    # requires the workflow to grant `id-token: write` on this job.
+    # The repo-level read-only default in the top-level `permissions`
+    # block stays put — only this job ramps up.
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - name: Checkout
         uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
