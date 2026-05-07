@@ -10,6 +10,7 @@
 //! channel without standing up a real WebSocket.
 
 use std::collections::HashMap;
+use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -84,22 +85,38 @@ impl SubscriptionHandle {
 
 impl Drop for SubscriptionHandle {
     fn drop(&mut self) {
+        // `fetch_sub` would wrap on a 0 → `u64::MAX` underflow;
+        // assert the invariant up front so the failure is loud
+        // rather than silent. The registry's `subscribe` always
+        // hands a handle out at refcount ≥ 1, so the only way to
+        // hit `prev == 0` is a programmer error (double-Drop /
+        // forged handle).
         let prev = self.entry.refcount.fetch_sub(1, Ordering::AcqRel);
-        // `prev == 0` would mean we already underflowed; the
-        // registry's `subscribe` guarantees we never decrement
-        // below 1 here. Use `checked_sub` semantics by guarding the
-        // teardown branch on `prev == 1` (i.e. count is now 0).
+        assert!(
+            prev >= 1,
+            "live subscription refcount underflow on drop (uri = {:?})",
+            self.uri
+        );
         if prev == 1 {
-            self.entry.cancel.cancel();
+            // Remove the map entry under the write lock BEFORE
+            // signalling cancel so a racing `subscribe` cannot
+            // attach to a cancelled entry between drop and the
+            // deferred map cleanup. We can't `await` from `Drop`,
+            // so the lock + cancel + reader teardown all run on a
+            // spawned task — but the spawned task observes the
+            // refcount-still-zero invariant under the write lock
+            // and skips removal if a new subscribe has already
+            // re-incremented past it.
             let registry = self.registry.clone();
             let uri = self.uri.clone();
-            // Drop the map entry on a background task so we do not
-            // hold the write lock from a `Drop` impl.
             tokio::spawn(async move {
                 let mut map = registry.entries.write().await;
-                if let Some(entry) = map.get(&uri) {
-                    if entry.refcount.load(Ordering::Acquire) == 0 {
-                        map.remove(&uri);
+                let still_zero = map
+                    .get(&uri)
+                    .is_some_and(|e| e.refcount.load(Ordering::Acquire) == 0);
+                if still_zero {
+                    if let Some(entry) = map.remove(&uri) {
+                        entry.cancel.cancel();
                     }
                 }
             });
@@ -183,9 +200,15 @@ impl LiveRegistry {
         provider: &P,
         uri: &ResourceUri,
     ) -> Result<SubscriptionHandle, AdapterError> {
-        // Fast path: entry already exists.
+        // Fast path: entry already exists *and* is still live. An
+        // entry whose `cancel` was fired (because Drop teardown is
+        // mid-flight but the deferred map cleanup hasn't run yet)
+        // does not count — we'd otherwise hand out a handle to a
+        // dead reader task. Treat as absent and fall through.
         if let Some(entry) = self.inner.entries.read().await.get(uri).cloned() {
-            return Ok(self.attach(uri.clone(), entry));
+            if !entry.cancel.is_cancelled() {
+                return Ok(self.attach(uri.clone(), entry));
+            }
         }
 
         // Slow path: open the upstream stream first, then publish
@@ -208,11 +231,15 @@ impl LiveRegistry {
         {
             let mut map = self.inner.entries.write().await;
             if let Some(existing) = map.get(uri).cloned() {
-                // Lost the race — drop our cancel + stream and
-                // attach to the winner.
-                cancel.cancel();
-                drop(stream);
-                return Ok(self.attach(uri.clone(), existing));
+                // Lost the race against another subscriber that
+                // got the write lock first AND is still live.
+                if !existing.cancel.is_cancelled() {
+                    cancel.cancel();
+                    drop(stream);
+                    return Ok(self.attach(uri.clone(), existing));
+                }
+                // The existing entry is mid-teardown; replace it.
+                map.remove(uri);
             }
             map.insert(uri.clone(), entry.clone());
         }
@@ -247,10 +274,11 @@ impl LiveRegistry {
     }
 
     fn attach(&self, uri: ResourceUri, entry: Arc<SubscriptionEntry>) -> SubscriptionHandle {
-        // `checked_add` on a `u64` only saturates at `u64::MAX`; we
-        // would have ~1.8e19 outstanding handles for that to fire.
-        // Treat it as a hard panic — the only way to reach it is
-        // a process-wide leak, and the panic surfaces it fast.
+        // We need ~1.8e19 outstanding handles to overflow a `u64`,
+        // so this panic only fires on a process-wide leak — surface
+        // it fast rather than silently wrap. `checked_add` returns
+        // `None` (not a saturating value) on overflow, so the
+        // assertion catches both directions.
         let prev = entry.refcount.fetch_add(1, Ordering::AcqRel);
         assert!(
             prev.checked_add(1).is_some(),
@@ -397,14 +425,42 @@ mod tests {
 
     #[tokio::test]
     async fn updates_broadcast_fires_and_latest_carries_payload() {
-        let provider = StubProvider::with(
-            book_btc(),
-            vec![serde_json::json!({"v": 1}), serde_json::json!({"v": 2})],
-        );
+        // Provider that opens the stream but suspends until we
+        // explicitly release it, so the test can attach the
+        // broadcast receiver *before* any updates can fire.
+        struct GatedProvider {
+            release: Arc<tokio::sync::Notify>,
+        }
+        impl SubscriptionProvider for GatedProvider {
+            fn subscribe(
+                &self,
+                _uri: ResourceUri,
+            ) -> Pin<Box<dyn Future<Output = Result<SubscriptionStream, AdapterError>> + Send + '_>>
+            {
+                let release = self.release.clone();
+                Box::pin(async move {
+                    let s = async_stream::stream! {
+                        release.notified().await;
+                        yield Ok::<_, AdapterError>(serde_json::json!({"v": 1}));
+                        yield Ok::<_, AdapterError>(serde_json::json!({"v": 2}));
+                    };
+                    Ok(Box::pin(s) as SubscriptionStream)
+                })
+            }
+        }
+
+        let release = Arc::new(tokio::sync::Notify::new());
+        let provider = GatedProvider {
+            release: release.clone(),
+        };
         let registry = LiveRegistry::new();
 
         let handle = registry.subscribe(&provider, &book_btc()).await.unwrap();
+        // Receiver must be in place BEFORE the reader fires its
+        // first send — broadcast::Receiver does not buffer past
+        // messages, so a pre-attach send is missed.
         let mut updates = handle.updates();
+        release.notify_one();
 
         // Wait for the reader task to drain the stub stream.
         for _ in 0..50 {
@@ -416,10 +472,7 @@ mod tests {
         let latest = handle.latest().await.expect("latest set");
         assert!(latest.get("v").is_some());
 
-        // The broadcast channel buffers the historical signals
-        // emitted before we attached, so we should receive at least
-        // one without blocking.
-        let signal = tokio::time::timeout(Duration::from_millis(200), updates.recv()).await;
+        let signal = tokio::time::timeout(Duration::from_millis(500), updates.recv()).await;
         assert!(signal.is_ok(), "expected at least one update signal");
     }
 
