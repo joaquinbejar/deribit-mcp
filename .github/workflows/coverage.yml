@@ -10,6 +10,11 @@ concurrency:
   group: coverage-${{ github.ref }}
   cancel-in-progress: true
 
+# Least-privilege token. Codecov upload runs against a project-scoped
+# secret and does not need any GitHub-side write permission.
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: short

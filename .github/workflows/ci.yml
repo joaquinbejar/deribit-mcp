@@ -1,4 +1,4 @@
-name: ci
+name: CI
 
 on:
   push:
@@ -11,6 +11,12 @@ on:
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
+
+# Least-privilege token. CI only needs to read the repository; no
+# workflow writes back to the repo, posts comments, etc. Each job
+# inherits this default unless it tightens further.
+permissions:
+  contents: read
 
 env:
   CARGO_TERM_COLOR: always
@@ -28,6 +34,14 @@ jobs:
         with:
           toolchain: stable
           components: rustfmt
+      # `cargo fmt` does not consult the registry / target dir, but
+      # caching the toolchain layout still shaves a couple of
+      # seconds and keeps the per-job Cache shape uniform across
+      # the matrix.
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6 # v2.7.8
+        with:
+          shared-key: fmt-check
       - name: cargo fmt --check
         run: cargo fmt --all --check
 
@@ -70,8 +84,12 @@ jobs:
         uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6 # v2.7.8
         with:
           shared-key: test-${{ matrix.toolchain }}
-      - name: cargo test --all-features
-        run: cargo test --all-features --locked
+      # Split unit/integration tests from doctests so a doctest
+      # failure surfaces independently and we don't pay for the
+      # doctest-only compilation twice (`cargo test` runs both by
+      # default).
+      - name: cargo test --lib --bins --tests
+        run: cargo test --lib --bins --tests --all-features --locked
       - name: cargo test --doc
         run: cargo test --doc --all-features --locked
 

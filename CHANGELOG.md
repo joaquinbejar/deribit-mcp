@@ -205,9 +205,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `secrets.CODECOV_TOKEN`. Honours `codecov.yml` (35 % project,
     15 % patch).
   - All third-party actions pinned to a specific commit SHA with
-    a friendly version comment (no `@master` / `@v*`). Cargo
-    registry, git, and target dirs cached via
-    `Swatinem/rust-cache` keyed per job.
+    a friendly version comment (no `@master` / `@v*`). Every job
+    (including `fmt-check`) caches via `Swatinem/rust-cache` with
+    a per-job `shared-key` so the registry / git / target dirs are
+    warm without cross-contaminating between matrix legs.
+  - Top-level `permissions: { contents: read }` on both workflows
+    — least-privilege `GITHUB_TOKEN` to reduce blast radius if a
+    third-party action is ever compromised.
   - `concurrency: cancel-in-progress` per ref so a quick re-push
     cancels the previous run.
 - Reference Compose recipe + env template (`docker-compose.yml`,
