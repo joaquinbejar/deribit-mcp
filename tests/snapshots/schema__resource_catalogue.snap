@@ -20,7 +20,7 @@ templates:
     mimeType: application/json
     name: Deribit ticker (live)
     uriTemplate: "deribit://ticker/{instrument}"
-  - description: "Live trades for an instrument. Wired in v0.3-04; current read returns AdapterError::Internal."
+  - description: "Trade events from the `trades.<instrument>.raw` channel. Read returns the most recent N TradeUpdate values (newest first) when a SubscriptionProvider is configured; otherwise AdapterError::Internal."
     mimeType: application/json
-    name: "Deribit last trades (live, v0.3-04+)"
+    name: Deribit last trades (live)
     uriTemplate: "deribit://trades/{instrument}"

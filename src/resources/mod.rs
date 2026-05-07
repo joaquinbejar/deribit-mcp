@@ -31,7 +31,7 @@ use crate::error::AdapterError;
 pub mod live;
 pub mod static_;
 
-use live::{BookSnapshot, LiveRegistry, SubscriptionProvider, TickerSnapshot};
+use live::{BookSnapshot, LiveRegistry, SubscriptionProvider, TickerSnapshot, TradeUpdate};
 
 /// Strongly-typed `deribit://` URI variants.
 ///
@@ -317,9 +317,11 @@ impl ResourceRegistry {
         ));
         list.templates.push(make_template(
             "deribit://trades/{instrument}",
-            "Deribit last trades (live, v0.3-04+)",
-            "Live trades for an instrument. Wired in v0.3-04; \
-             current read returns AdapterError::Internal.",
+            "Deribit last trades (live)",
+            "Trade events from the `trades.<instrument>.raw` channel. \
+             Read returns the most recent N TradeUpdate values \
+             (newest first) when a SubscriptionProvider is configured; \
+             otherwise AdapterError::Internal.",
         ));
         Self {
             list,
@@ -389,7 +391,45 @@ impl ResourceRegistry {
                 Ok(ResourceContent::Json(serde_json::to_value(&ticker)?))
             }
             ResourceUri::Trades { .. } => {
-                Err(AdapterError::internal("live trades land in v0.3-04"))
+                // Subscribe (so the reader task is running) and
+                // hand back the rolling history of decoded
+                // trades. Each upstream frame is an array of
+                // trade objects; we flatten across frames and
+                // sort by timestamp newest-first so the LLM
+                // sees a deterministic chronological list,
+                // capped at `HISTORY_CAPACITY`.
+                use tokio::sync::broadcast::error::RecvError;
+                let provider = self.provider.as_ref().ok_or_else(|| {
+                    AdapterError::internal("live subscription provider not configured")
+                })?;
+                let handle = self.live.subscribe(provider.as_ref(), uri).await?;
+                let mut updates = handle.updates();
+                if handle.latest().await.is_none() {
+                    match tokio::time::timeout(FIRST_FRAME_TIMEOUT, updates.recv()).await {
+                        Ok(Ok(())) | Ok(Err(RecvError::Lagged(_))) => {}
+                        Ok(Err(RecvError::Closed)) => {
+                            return Err(AdapterError::internal(
+                                "live subscription closed before producing a frame",
+                            ));
+                        }
+                        Err(_elapsed) => {
+                            return Err(AdapterError::internal(
+                                "live subscription did not produce a frame in time",
+                            ));
+                        }
+                    }
+                }
+                let mut trades: Vec<TradeUpdate> = Vec::new();
+                for frame in handle.history().await {
+                    // Propagate decode errors rather than silently
+                    // dropping a malformed frame — an upstream
+                    // contract change should surface, not vanish.
+                    let mut decoded = TradeUpdate::batch_from_value(&frame)?;
+                    trades.append(&mut decoded);
+                }
+                trades.sort_by_key(|t| std::cmp::Reverse(t.timestamp));
+                trades.truncate(live::HISTORY_CAPACITY);
+                Ok(ResourceContent::Json(serde_json::to_value(&trades)?))
             }
         }
     }
@@ -697,26 +737,85 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn read_trades_returns_internal_until_v03_04() {
-        // `Book` (v0.3-02) and `Ticker` (v0.3-03) are wired;
-        // `Trades` lands in v0.3-04 and still returns the
-        // documented `Internal` placeholder.
-        let r = ResourceRegistry::build();
-        let err = r
-            .read(
-                &ctx(),
-                &ResourceUri::Trades {
-                    instrument: "BTC-PERPETUAL".to_string(),
-                },
-            )
-            .await
-            .unwrap_err();
-        match err {
-            AdapterError::Internal { ref reason } => {
-                assert!(reason.contains("trades"), "unexpected reason: {reason}");
+    async fn read_live_trades_uses_provider_and_returns_chronological_history() {
+        use crate::resources::live::{SubscriptionProvider, SubscriptionStream};
+        use std::future::Future;
+        use std::pin::Pin;
+        use std::sync::Arc;
+
+        struct StubProvider;
+        impl SubscriptionProvider for StubProvider {
+            fn subscribe(
+                &self,
+                _uri: ResourceUri,
+            ) -> Pin<Box<dyn Future<Output = Result<SubscriptionStream, AdapterError>> + Send + '_>>
+            {
+                Box::pin(async move {
+                    // Two frames, each carrying a small batch.
+                    let frames = vec![
+                        Ok::<_, AdapterError>(serde_json::json!([
+                            {
+                                "direction": "buy",
+                                "price": 50_001.0,
+                                "amount": 1.0,
+                                "trade_id": "t1",
+                                "timestamp": 1_700_000_000_001_i64
+                            }
+                        ])),
+                        Ok::<_, AdapterError>(serde_json::json!([
+                            {
+                                "direction": "sell",
+                                "price": 50_002.0,
+                                "amount": 0.5,
+                                "trade_id": "t2",
+                                "timestamp": 1_700_000_000_002_i64,
+                                "liquidation": "M",
+                                "tick_direction": 1_i64,
+                                "mark_price": 50_001.5,
+                                "index_price": 50_010.0
+                            }
+                        ])),
+                    ];
+                    let stream = futures_util::stream::iter(frames);
+                    Ok(Box::pin(stream) as SubscriptionStream)
+                })
             }
-            other => panic!("unexpected: {other:?}"),
         }
+
+        let registry = ResourceRegistry::build().with_subscription_provider(Arc::new(StubProvider));
+        let uri = ResourceUri::Trades {
+            instrument: "BTC-PERPETUAL".to_string(),
+        };
+        // Give the reader task a beat to drain both frames.
+        let _ = registry.read(&ctx(), &uri).await.expect("first ok");
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        let content = registry.read(&ctx(), &uri).await.expect("second ok");
+        let ResourceContent::Json(value) = content;
+        let trades = value.as_array().expect("array");
+        let ids: Vec<&str> = trades
+            .iter()
+            .filter_map(|t| t.get("trade_id").and_then(|v| v.as_str()))
+            .collect();
+        assert_eq!(
+            ids,
+            vec!["t2", "t1"],
+            "expected newest-first ordering; got {ids:?}"
+        );
+        let t2 = &trades[0];
+        assert_eq!(
+            t2.get("liquidation").and_then(|v| v.as_str()),
+            Some("M"),
+            "t2 should carry the liquidation marker"
+        );
+        assert_eq!(t2.get("tick_direction").and_then(|v| v.as_i64()), Some(1));
+        assert_eq!(
+            t2.get("mark_price").and_then(|v| v.as_f64()),
+            Some(50_001.5)
+        );
+        assert_eq!(
+            t2.get("index_price").and_then(|v| v.as_f64()),
+            Some(50_010.0)
+        );
     }
 
     #[tokio::test]
