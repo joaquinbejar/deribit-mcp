@@ -19,6 +19,8 @@
 //! a few ms.
 
 use std::collections::HashSet;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use serde_json::{Value, json};
@@ -35,6 +37,8 @@ pub struct MockWsServer {
     push_tx: broadcast::Sender<Value>,
     cancel: CancellationToken,
     accept_handle: Mutex<Option<JoinHandle<()>>>,
+    subscribe_count: Arc<std::sync::atomic::AtomicU64>,
+    unsubscribe_count: Arc<std::sync::atomic::AtomicU64>,
 }
 
 #[allow(dead_code)]
@@ -46,8 +50,12 @@ impl MockWsServer {
         let addr = listener.local_addr().expect("local addr");
         let (push_tx, _) = broadcast::channel::<Value>(64);
         let cancel = CancellationToken::new();
+        let subscribe_count = Arc::new(AtomicU64::new(0));
+        let unsubscribe_count = Arc::new(AtomicU64::new(0));
         let accept_cancel = cancel.clone();
         let accept_push = push_tx.clone();
+        let accept_sub_count = subscribe_count.clone();
+        let accept_unsub_count = unsubscribe_count.clone();
         let accept_handle = tokio::spawn(async move {
             loop {
                 tokio::select! {
@@ -57,7 +65,11 @@ impl MockWsServer {
                         let Ok((stream, _)) = accepted else { continue };
                         let conn_cancel = accept_cancel.child_token();
                         let conn_push = accept_push.clone();
-                        tokio::spawn(handle_connection(stream, conn_push, conn_cancel));
+                        let conn_sub = accept_sub_count.clone();
+                        let conn_unsub = accept_unsub_count.clone();
+                        tokio::spawn(handle_connection(
+                            stream, conn_push, conn_cancel, conn_sub, conn_unsub,
+                        ));
                     }
                 }
             }
@@ -68,7 +80,32 @@ impl MockWsServer {
             push_tx,
             cancel,
             accept_handle: Mutex::new(Some(accept_handle)),
+            subscribe_count,
+            unsubscribe_count,
         }
+    }
+
+    /// Total `public/subscribe` requests observed across all
+    /// connections. Snapshot — a subsequent request will increment
+    /// the counter.
+    pub fn subscribe_count(&self) -> u64 {
+        self.subscribe_count.load(Ordering::Acquire)
+    }
+
+    /// Total `public/unsubscribe` requests observed.
+    pub fn unsubscribe_count(&self) -> u64 {
+        self.unsubscribe_count.load(Ordering::Acquire)
+    }
+
+    /// Drop every accepted connection and stop accepting new ones
+    /// for the cancellation window. Used by reconnect-style tests
+    /// to simulate "the upstream killed the socket"; a fresh
+    /// `start()` is needed if the test wants the server to come
+    /// back. (For a true reconnect-mid-session test, prefer
+    /// closing the per-connection task — left as a future helper
+    /// when the real `WsSubscriptionProvider` lands.)
+    pub fn shutdown(&self) {
+        self.cancel.cancel();
     }
 
     /// `ws://…` URL clients connect to.
@@ -120,6 +157,8 @@ async fn handle_connection(
     stream: TcpStream,
     push_tx: broadcast::Sender<Value>,
     cancel: CancellationToken,
+    subscribe_count: Arc<AtomicU64>,
+    unsubscribe_count: Arc<AtomicU64>,
 ) {
     use futures_util::{SinkExt, StreamExt};
 
@@ -154,6 +193,7 @@ async fn handle_connection(
                             }
                         }),
                         "public/subscribe" => {
+                            subscribe_count.fetch_add(1, Ordering::AcqRel);
                             let channels: Vec<String> = req
                                 .get("params")
                                 .and_then(|p| p.get("channels"))
@@ -174,6 +214,7 @@ async fn handle_connection(
                             })
                         }
                         "public/unsubscribe" => {
+                            unsubscribe_count.fetch_add(1, Ordering::AcqRel);
                             let channels: Vec<String> = req
                                 .get("params")
                                 .and_then(|p| p.get("channels"))
