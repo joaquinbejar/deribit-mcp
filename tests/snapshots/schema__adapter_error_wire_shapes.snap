@@ -4,22 +4,25 @@ expression: serialised
 ---
 - - auth_missing_credentials
   - kind: Auth
-    reason: missing_credentials
+    reason:
+      kind: missing_credentials
 - - auth_unauthorized
   - kind: Auth
-    reason: unauthorized
-- - auth_token_refresh_failed
-  - kind: Auth
-    reason: token_refresh_failed
+    reason:
+      kind: unauthorized
 - - auth_token_expired_and_refresh_failed
   - kind: Auth
-    reason: token_expired_and_refresh_failed
-- - auth_insufficient_scope
+    reason:
+      kind: token_expired_and_refresh_failed
+- - auth_suspended
   - kind: Auth
-    reason: insufficient_scope
-- - auth_other
+    reason:
+      kind: suspended
+- - auth_scope_insufficient
   - kind: Auth
-    reason: other
+    reason:
+      kind: scope_insufficient
+      needed: "trade:read_write"
 - - rate_limited
   - kind: RateLimited
     retry_after_ms: 2000

@@ -96,27 +96,23 @@ fn adapter_error_wire_shapes_unchanged() {
             },
         ),
         (
-            "auth_token_refresh_failed",
-            AdapterError::Auth {
-                reason: AuthFailureReason::TokenRefreshFailed,
-            },
-        ),
-        (
             "auth_token_expired_and_refresh_failed",
             AdapterError::Auth {
                 reason: AuthFailureReason::TokenExpiredAndRefreshFailed,
             },
         ),
         (
-            "auth_insufficient_scope",
+            "auth_suspended",
             AdapterError::Auth {
-                reason: AuthFailureReason::InsufficientScope,
+                reason: AuthFailureReason::Suspended,
             },
         ),
         (
-            "auth_other",
+            "auth_scope_insufficient",
             AdapterError::Auth {
-                reason: AuthFailureReason::Other,
+                reason: AuthFailureReason::ScopeInsufficient {
+                    needed: "trade:read_write".to_string(),
+                },
             },
         ),
         (
