@@ -9,6 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Mock WebSocket server (`tests/support/mock_ws.rs`) — v0.3-06:
+  - `MockWsServer::start()` binds an ephemeral `127.0.0.1:0` port
+    and accepts WS upgrades. `ws_url()` returns the
+    `ws://…/ws/api/v2` URL clients connect to.
+  - Per-test instance, no global state. Drop fires the
+    cancellation token; the listener task aborts within a few
+    ms.
+  - Honours the subset of the Deribit JSON-RPC WS protocol the
+    adapter cares about: `public/auth` → canned token,
+    `public/subscribe` / `public/unsubscribe` → ack with
+    channel list (tracked per connection), `public/set_heartbeat`
+    / `public/test` → no-op `ok` ack. Anything else → `result:
+    null`.
+  - `push_frame(channel, data)` wraps the payload in the
+    standard `subscription` envelope and relays it to every
+    connected client that has subscribed to the channel.
+  - New dev-dep: `tokio-tungstenite = "0.29"` (same major as
+    `deribit-websocket` already pulls in, so the test binary
+    does not add a second copy).
+  - Coverage: `tests/integration_live.rs` exercises the mock
+    end-to-end (auth handshake, scripted book frame relay,
+    unsubscribe stops the relay).
+  - `tests/support/README.md` documents the helper API.
 - Subscription update notifications + throttle (v0.3-05):
   - New `NotificationSink` trait. The live registry calls
     `sink.notify(&uri)` post-throttle every time a subscribed
