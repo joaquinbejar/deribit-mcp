@@ -1,0 +1,59 @@
+name: coverage
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: coverage-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: short
+
+jobs:
+  tarpaulin:
+    name: cargo-tarpaulin → Codecov
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@439cf607258077187679211f12aa6f19af4a0af7 # stable
+        with:
+          toolchain: stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6 # v2.7.8
+        with:
+          shared-key: coverage
+
+      - name: Install cargo-tarpaulin
+        uses: taiki-e/install-action@7fcc5e7ad06ed4b6efbc56fdf52a3c98a82d8fff # v2.49.41
+        with:
+          tool: cargo-tarpaulin
+
+      - name: Run tarpaulin
+        env:
+          LOGLEVEL: WARN
+        run: |
+          cargo tarpaulin \
+            --workspace \
+            --all-features \
+            --timeout 120 \
+            --out Xml \
+            --output-dir coverage \
+            --skip-clean
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@7f8b4b4bde536c465e797be725718b88c5d95e0e # v5.4.1
+        with:
+          files: coverage/cobertura.xml
+          fail_ci_if_error: false
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}

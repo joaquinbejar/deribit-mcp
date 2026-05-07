@@ -192,6 +192,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the server over a pair of `tokio::io::duplex` pipes, sends one
   `initialize` request, asserts the response shape (protocol version,
   serverInfo, capabilities), and verifies graceful EOF shutdown.
+- GitHub Actions CI (`.github/workflows/ci.yml`,
+  `.github/workflows/coverage.yml`):
+  - `ci.yml` jobs: `fmt-check`, `lint` (`cargo clippy
+    --all-targets --all-features -- -D warnings`), `test`
+    (matrix `stable` + MSRV `1.85` against `cargo test
+    --all-features --locked` and `--doc`), `schema` (snapshot
+    suite), `integration` (mockito + transport tests),
+    `build-release` (`RUSTFLAGS=-D warnings`), `doc`
+    (`RUSTDOCFLAGS=-D warnings`).
+  - `coverage.yml`: `cargo-tarpaulin` → Codecov upload guarded by
+    `secrets.CODECOV_TOKEN`. Honours `codecov.yml` (35 % project,
+    15 % patch).
+  - All third-party actions pinned to a specific commit SHA with
+    a friendly version comment (no `@master` / `@v*`). Cargo
+    registry, git, and target dirs cached via
+    `Swatinem/rust-cache` keyed per job.
+  - `concurrency: cancel-in-progress` per ref so a quick re-push
+    cancels the previous run.
 - Reference Compose recipe + env template (`docker-compose.yml`,
   `.env.example`):
   - `docker-compose.yml`: `image: ghcr.io/joaquinbejar/deribit-mcp:latest`,
