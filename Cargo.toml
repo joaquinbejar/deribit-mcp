@@ -2,6 +2,7 @@
 name = "deribit-mcp"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.85"
 authors = ["Joaquin Bejar <jb@taunais.com>"]
 description = "MCP (Model Context Protocol) server for Deribit trading platform"
 license = "MIT"
@@ -16,6 +17,72 @@ include = [
     "Cargo.toml",
     "README.md",
     "LICENSE",
+    "CHANGELOG.md",
 ]
 
+[lib]
+name = "deribit_mcp"
+path = "src/lib.rs"
+
+[[bin]]
+name = "deribit-mcp"
+path = "src/main.rs"
+
 [dependencies]
+# MCP SDK — pinned to a specific minor.
+rmcp = { version = "1.6", default-features = false, features = [
+    "server",
+    "macros",
+    "schemars",
+    "transport-io",
+    "transport-streamable-http-server",
+] }
+
+# Async runtime.
+tokio = { version = "1", features = [
+    "rt-multi-thread",
+    "macros",
+    "signal",
+    "net",
+    "io-std",
+    "sync",
+    "time",
+] }
+
+# Observability.
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
+
+# Serialization + schema.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+schemars = "0.8"
+
+# Errors.
+thiserror = "2"
+
+# CLI + config.
+clap = { version = "4", features = ["derive", "env"] }
+dotenvy = "0.15"
+
+# Binary main only — bubbles up startup failures to a printed exit message.
+anyhow = "1"
+
+# Sibling Deribit Rust family. Auth, rate limiting, reconnect, wire codecs all
+# live upstream — this crate is a thin adapter (ADR-0001).
+deribit-base = "0.3"
+deribit-http = { version = "0.7", default-features = false, features = ["native"] }
+# Declared for v0.1; live resources land in v0.3 (ADR-0006).
+deribit-websocket = { version = "0.3", default-features = false, features = ["rustls-aws-lc"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["test-util"] }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+
+[profile.dev]
+debug = "line-tables-only"
