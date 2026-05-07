@@ -156,9 +156,11 @@ curl -sf http://127.0.0.1:8723/healthz
 # → ok
 ```
 
-When `DERIBIT_HTTP_BEARER_TOKEN` is set, every other request must
-carry `Authorization: Bearer <token>`; `/healthz` stays anonymous so
-container orchestration probes never need a credential.
+When `DERIBIT_HTTP_BEARER_TOKEN` is set, every request to `/mcp`
+must carry `Authorization: Bearer <token>` (mismatches return
+`401`). `/healthz` is always anonymous so container orchestration
+probes never need a credential, and unknown paths surface a normal
+`404` without requiring authentication either.
 
 ### Configuration
 
