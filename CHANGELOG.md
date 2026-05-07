@@ -39,6 +39,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `get_positions { currency?, kind?, subaccount_id? }` — open
     positions, optionally filtered.
   - `get_subaccounts { with_portfolio? }` — subaccount list.
+  - `get_transaction_log { currency, start_timestamp,
+    end_timestamp, query?, count?, subaccount_id?, continuation? }`
+    — historical transaction log over a window.
+  - `get_deposits { currency, count?, offset? }` — recent deposits.
+  - `get_withdrawals { currency, count?, offset? }` — recent
+    withdrawals.
   - All carry `ToolClass::Account`. The registry omits them
     entirely when credentials are absent (ADR-0003), and the
     bearer-token gate at dispatch time provides defence-in-depth.

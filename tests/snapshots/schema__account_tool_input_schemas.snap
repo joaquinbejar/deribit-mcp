@@ -18,6 +18,31 @@ expression: schemas
       - currency
     title: GetAccountSummaryInput
     type: object
+- - get_deposits
+  - $schema: "https://json-schema.org/draft/2020-12/schema"
+    description: "Pagination + currency input shared by `get_deposits` and\n`get_withdrawals` (the upstream signatures are identical)."
+    properties:
+      count:
+        description: "Page size; defaults to upstream's default (10) when omitted."
+        format: uint32
+        minimum: 0
+        type:
+          - integer
+          - "null"
+      currency:
+        description: "Currency to scope the query to (`BTC`, `ETH`, …)."
+        type: string
+      offset:
+        description: Page offset; defaults to 0 when omitted.
+        format: uint32
+        minimum: 0
+        type:
+          - integer
+          - "null"
+    required:
+      - currency
+    title: PaginatedCurrencyInput
+    type: object
 - - get_positions
   - $schema: "https://json-schema.org/draft/2020-12/schema"
     description: "`get_positions` input."
@@ -50,4 +75,78 @@ expression: schemas
           - boolean
           - "null"
     title: GetSubaccountsInput
+    type: object
+- - get_transaction_log
+  - $schema: "https://json-schema.org/draft/2020-12/schema"
+    description: "`get_transaction_log` input."
+    properties:
+      continuation:
+        description: "Continuation token from a previous page (returned in\nupstream `continuation` field)."
+        format: uint64
+        minimum: 0
+        type:
+          - integer
+          - "null"
+      count:
+        description: Maximum entries to return (upstream caps the page size).
+        format: uint64
+        minimum: 0
+        type:
+          - integer
+          - "null"
+      currency:
+        description: "Currency to scope the log to (`BTC`, `ETH`, …)."
+        type: string
+      end_timestamp:
+        description: "Window end, Unix epoch milliseconds."
+        format: uint64
+        minimum: 0
+        type: integer
+      query:
+        description: Optional substring search across the log entries.
+        type:
+          - string
+          - "null"
+      start_timestamp:
+        description: "Window start, Unix epoch milliseconds."
+        format: uint64
+        minimum: 0
+        type: integer
+      subaccount_id:
+        description: Optional subaccount id to scope the log to.
+        format: uint64
+        minimum: 0
+        type:
+          - integer
+          - "null"
+    required:
+      - currency
+      - start_timestamp
+      - end_timestamp
+    title: GetTransactionLogInput
+    type: object
+- - get_withdrawals
+  - $schema: "https://json-schema.org/draft/2020-12/schema"
+    description: "Pagination + currency input shared by `get_deposits` and\n`get_withdrawals` (the upstream signatures are identical)."
+    properties:
+      count:
+        description: "Page size; defaults to upstream's default (10) when omitted."
+        format: uint32
+        minimum: 0
+        type:
+          - integer
+          - "null"
+      currency:
+        description: "Currency to scope the query to (`BTC`, `ETH`, …)."
+        type: string
+      offset:
+        description: Page offset; defaults to 0 when omitted.
+        format: uint32
+        minimum: 0
+        type:
+          - integer
+          - "null"
+    required:
+      - currency
+    title: PaginatedCurrencyInput
     type: object
