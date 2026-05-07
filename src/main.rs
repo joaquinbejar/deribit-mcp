@@ -13,13 +13,15 @@
 #![forbid(unsafe_code)]
 
 use anyhow::Result;
+use deribit_mcp::config::Config;
 
 fn main() -> Result<()> {
+    let _config = Config::load()?;
+
     // The async runtime + transport selection wiring lands in v0.1-08 /
-    // v0.1-09. v0.1-01 only delivers the binary entry point so other
-    // tickets can land independently.
+    // v0.1-09. v0.1-02 loads the config; subsequent issues wire it up.
     eprintln!(
-        "deribit-mcp v{} — scaffolding only; transport wiring lands in v0.1-08/v0.1-09.",
+        "deribit-mcp v{} — config loaded; transport wiring lands in v0.1-08/v0.1-09.",
         env!("CARGO_PKG_VERSION")
     );
     Ok(())
