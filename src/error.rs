@@ -236,9 +236,11 @@ impl From<HttpError> for AdapterError {
 
 /// Parse an `"API error: <code> - <message>"` substring out of a
 /// `deribit-http` `RequestFailed` body. Returns `None` when the
-/// pattern is not found or the code does not parse as `i32`. Used
-/// at the `HttpError → AdapterError` boundary to route Deribit API
-/// errors into the structured `UpstreamErrorKind::Api` shape.
+/// pattern is not found or the code does not parse as `i64`
+/// (matching the `UpstreamErrorKind::Api { code: Option<i64>, … }`
+/// wire shape). Used at the `HttpError → AdapterError` boundary to
+/// route Deribit API errors into the structured
+/// `UpstreamErrorKind::Api` shape.
 #[cold]
 #[inline(never)]
 fn parse_api_error(message: &str) -> Option<(i64, String)> {
