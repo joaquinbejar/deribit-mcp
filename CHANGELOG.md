@@ -45,6 +45,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `get_deposits { currency, count?, offset? }` — recent deposits.
   - `get_withdrawals { currency, count?, offset? }` — recent
     withdrawals.
+  - `get_open_orders_by_currency { currency, kind?, type? }` —
+    open orders for a currency.
+  - `get_open_orders_by_instrument { instrument_name, type? }` —
+    open orders for an instrument.
+  - `get_user_trades_by_currency { currency, kind?, start_id?,
+    end_id?, count?, start_timestamp?, end_timestamp?, sorting?,
+    historical?, subaccount_id? }` — user trades over an id /
+    timestamp window. The handler converts the user-supplied
+    strings into the upstream's `Currency` /
+    `InstrumentKind` / `SortDirection` closed-set enums; an
+    out-of-vocab value returns
+    `AdapterError::Validation { field: "currency"|"kind"|"sorting" }`.
+  - `get_user_trades_by_instrument { instrument_name, start_seq?,
+    end_seq?, count?, include_old?, sorting? }` — user trades for
+    an instrument over a sequence-number window.
   - All carry `ToolClass::Account`. The registry omits them
     entirely when credentials are absent (ADR-0003), and the
     bearer-token gate at dispatch time provides defence-in-depth.
