@@ -43,6 +43,43 @@ expression: schemas
       - currency
     title: PaginatedCurrencyInput
     type: object
+- - get_open_orders_by_currency
+  - $schema: "https://json-schema.org/draft/2020-12/schema"
+    description: "`get_open_orders_by_currency` input."
+    properties:
+      currency:
+        description: "Currency (`BTC`, `ETH`, …)."
+        type: string
+      kind:
+        description: "Optional instrument-kind filter: `future`, `option`, `spot`,\n`future_combo`, `option_combo`."
+        type:
+          - string
+          - "null"
+      type:
+        description: "Optional order-type filter (`limit`, `stop_limit`, `take_limit`,\n`market`, `stop_market`, `take_market`, `market_limit`,\n`trailing_stop`, `all`)."
+        type:
+          - string
+          - "null"
+    required:
+      - currency
+    title: GetOpenOrdersByCurrencyInput
+    type: object
+- - get_open_orders_by_instrument
+  - $schema: "https://json-schema.org/draft/2020-12/schema"
+    description: "`get_open_orders_by_instrument` input."
+    properties:
+      instrument_name:
+        description: "Instrument identifier (`BTC-PERPETUAL`, …)."
+        type: string
+      type:
+        description: "Optional order-type filter; same vocabulary as\n[`GetOpenOrdersByCurrencyInput::order_type`]."
+        type:
+          - string
+          - "null"
+    required:
+      - instrument_name
+    title: GetOpenOrdersByInstrumentInput
+    type: object
 - - get_positions
   - $schema: "https://json-schema.org/draft/2020-12/schema"
     description: "`get_positions` input."
@@ -124,6 +161,112 @@ expression: schemas
       - start_timestamp
       - end_timestamp
     title: GetTransactionLogInput
+    type: object
+- - get_user_trades_by_currency
+  - $schema: "https://json-schema.org/draft/2020-12/schema"
+    description: "`get_user_trades_by_currency` input."
+    properties:
+      count:
+        description: Page size (1..=1000; upstream default 10).
+        format: uint32
+        minimum: 0
+        type:
+          - integer
+          - "null"
+      currency:
+        description: "Currency (`BTC`, `ETH`, …). Forwarded to the upstream as a\nclosed-set `Currency` enum."
+        type: string
+      end_id:
+        description: Last trade id to return.
+        type:
+          - string
+          - "null"
+      end_timestamp:
+        description: Latest timestamp to filter on (epoch ms).
+        format: uint64
+        minimum: 0
+        type:
+          - integer
+          - "null"
+      historical:
+        description: "When `true`, include archived trades."
+        type:
+          - boolean
+          - "null"
+      kind:
+        description: "Optional instrument-kind filter: `future`, `option`, `spot`,\n`future_combo`, `option_combo`."
+        type:
+          - string
+          - "null"
+      sorting:
+        description: "Sort direction: `asc` or `desc`."
+        type:
+          - string
+          - "null"
+      start_id:
+        description: First trade id to return (string per upstream spec).
+        type:
+          - string
+          - "null"
+      start_timestamp:
+        description: Earliest timestamp to filter on (epoch ms).
+        format: uint64
+        minimum: 0
+        type:
+          - integer
+          - "null"
+      subaccount_id:
+        description: Optional subaccount id.
+        format: uint32
+        minimum: 0
+        type:
+          - integer
+          - "null"
+    required:
+      - currency
+    title: GetUserTradesByCurrencyInput
+    type: object
+- - get_user_trades_by_instrument
+  - $schema: "https://json-schema.org/draft/2020-12/schema"
+    description: "`get_user_trades_by_instrument` input."
+    properties:
+      count:
+        description: Page size (1..=1000; upstream default 10).
+        format: uint32
+        minimum: 0
+        type:
+          - integer
+          - "null"
+      end_seq:
+        description: Last trade sequence number to return.
+        format: uint64
+        minimum: 0
+        type:
+          - integer
+          - "null"
+      include_old:
+        description: "When `true`, include archived trades."
+        type:
+          - boolean
+          - "null"
+      instrument_name:
+        description: "Instrument identifier (`BTC-PERPETUAL`, …)."
+        type: string
+      sorting:
+        description: "Sort direction: `asc` or `desc`."
+        type:
+          - string
+          - "null"
+      start_seq:
+        description: First trade sequence number to return.
+        format: uint64
+        minimum: 0
+        type:
+          - integer
+          - "null"
+    required:
+      - instrument_name
+    title: GetUserTradesByInstrumentInput
     type: object
 - - get_withdrawals
   - $schema: "https://json-schema.org/draft/2020-12/schema"
