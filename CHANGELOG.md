@@ -88,6 +88,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Stub `ToolRegistry` (`src/tools/mod.rs`) and `ResourceRegistry`
   (`src/resources/mod.rs`) — empty placeholders the server holds an
   `Arc<…>` of so v0.1-06 / v0.1-07 can land independently.
+- Tool registry, effect-class gating, and dispatch
+  (`src/tools/mod.rs`):
+  - `ToolEntry` (descriptor + class + handler) and `ToolHandlerFn`
+    (boxed async handler) are the building blocks every per-family
+    `register()` adds.
+  - `ToolRegistry::build(&AdapterContext)` is the canonical builder:
+    `Read` always, `Account` only when credentials are present,
+    `Trading` only when credentials are present *and*
+    `--allow-trading` is set (ADR-0010).
+  - `ToolRegistry::call` performs a defence-in-depth class
+    re-check before dispatching to the handler — even if a future
+    code path inserts a `Trading` entry without the flag, dispatch
+    refuses with `AdapterError::NotEnabled`.
+  - Unknown tool name returns `AdapterError::Validation`.
+  - `ToolClass::flag()` exposes the human-readable enabling
+    requirement for the `NotEnabled` payload.
+- Per-family registration hooks (`src/tools/{public,account,trading}.rs`)
+  are empty in v0.1-06 — v0.1-10 / v0.1-11 / v0.2 / v0.4 fill them.
 - `CHANGELOG.md` following Keep-a-Changelog.
 
 ### Repository
