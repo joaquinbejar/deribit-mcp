@@ -22,6 +22,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use super::schema::{parse_input as parse, schema_for};
 use super::{ToolClass, ToolEntry, ToolHandlerFn, ToolRegistry};
 use crate::context::AdapterContext;
 use crate::error::AdapterError;
@@ -41,8 +42,8 @@ pub fn register(registry: &mut ToolRegistry) {
 pub struct GetAccountSummaryInput {
     /// Currency to summarise (`BTC`, `ETH`, `USDC`, …).
     pub currency: String,
-    /// Include the per-currency `summaries[]` (id, email, account
-    /// type, …). Defaults to `false` upstream.
+    /// Include the per-currency `summaries[]` (id, email, account type, …).
+    /// Defaults to `false` upstream.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub extended: Option<bool>,
 }
@@ -125,7 +126,7 @@ async fn handle_get_positions(ctx: &AdapterContext, input: Value) -> Result<Valu
 // ----- get_subaccounts ----------------------------------------------
 
 /// `get_subaccounts` input.
-#[derive(Debug, Serialize, Deserialize, JsonSchema, Default)]
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub struct GetSubaccountsInput {
     /// When `true`, include each subaccount's portfolio in the
@@ -154,25 +155,6 @@ async fn handle_get_subaccounts(ctx: &AdapterContext, input: Value) -> Result<Va
     let input: GetSubaccountsInput = parse(input)?;
     let result = ctx.http.get_subaccounts(input.with_portfolio).await?;
     Ok(serde_json::to_value(&result)?)
-}
-
-// ----- helpers ------------------------------------------------------
-
-fn parse<T: for<'de> serde::Deserialize<'de>>(input: Value) -> Result<T, AdapterError> {
-    serde_json::from_value::<T>(input).map_err(|err| AdapterError::Validation {
-        field: "arguments".to_string(),
-        message: err.to_string(),
-    })
-}
-
-fn schema_for<T: JsonSchema>() -> Arc<serde_json::Map<String, Value>> {
-    let schema = schemars::schema_for!(T);
-    let json = serde_json::to_value(schema).expect("schema must be a JSON object");
-    let map = json
-        .as_object()
-        .expect("schemars schema_for! always produces an object")
-        .clone();
-    Arc::new(map)
 }
 
 #[cfg(test)]

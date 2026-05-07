@@ -41,6 +41,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use super::schema::{parse_input as parse, schema_for};
 use super::{ToolClass, ToolEntry, ToolHandlerFn, ToolRegistry};
 use crate::context::AdapterContext;
 use crate::error::AdapterError;
@@ -578,31 +579,6 @@ async fn handle_get_historical_volatility(
     let input: GetHistoricalVolatilityInput = parse(input)?;
     let result = ctx.http.get_historical_volatility(&input.currency).await?;
     Ok(serde_json::to_value(&result)?)
-}
-
-// ----- helpers ------------------------------------------------------
-
-/// Parse the JSON arguments into the typed input struct.
-///
-/// Surfaces a structured [`AdapterError::Validation`] with the
-/// upstream serde error message so the LLM sees what is wrong rather
-/// than an opaque parse failure.
-fn parse<T: for<'de> serde::Deserialize<'de>>(input: Value) -> Result<T, AdapterError> {
-    serde_json::from_value::<T>(input).map_err(|err| AdapterError::Validation {
-        field: "arguments".to_string(),
-        message: err.to_string(),
-    })
-}
-
-/// Build an `Arc<JsonObject>` schema for a `JsonSchema` type.
-fn schema_for<T: JsonSchema>() -> Arc<serde_json::Map<String, Value>> {
-    let schema = schemars::schema_for!(T);
-    let json = serde_json::to_value(schema).expect("schema must be a JSON object");
-    let map = json
-        .as_object()
-        .expect("schemars schema_for! always produces an object")
-        .clone();
-    Arc::new(map)
 }
 
 #[cfg(test)]

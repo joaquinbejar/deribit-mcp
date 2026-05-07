@@ -10,7 +10,7 @@ expression: schemas
         description: "Currency to summarise (`BTC`, `ETH`, `USDC`, …)."
         type: string
       extended:
-        description: "Include the per-currency `summaries[]` (id, email, account\ntype, …). Defaults to `false` upstream."
+        description: "Include the per-currency `summaries[]` (id, email, account type, …).\nDefaults to `false` upstream."
         type:
           - boolean
           - "null"
