@@ -103,6 +103,11 @@ tokio = { version = "1", features = ["test-util"] }
 # `async_stream::stream!` for unit-test stub providers that need
 # to interleave a `Notify` with a fixed sequence of items.
 async-stream = "0.3"
+# WebSocket server-side for the v0.3-06 mock used by the live-resource
+# integration tests. Pinned to the same major as the version
+# `deribit-websocket` already pulls in so the test binary doesn't add
+# a second copy.
+tokio-tungstenite = "0.29"
 # Snapshot review for tool input-schemas and `AdapterError` wire shape.
 # Snapshots are committed under `tests/snapshots/` and reviewed
 # deliberately on every PR.
