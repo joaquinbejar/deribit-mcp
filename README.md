@@ -119,13 +119,12 @@ services:
     env_file: .env
     ports:
       - "127.0.0.1:8723:8723"
-    healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8723/healthz"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 10s
 ```
+
+> The image is distroless (no shell / `curl` / `wget` / `nc`), so
+> there is no in-container `HEALTHCHECK`. Probe `GET /healthz` from
+> outside the container — k8s `httpGet`, Portainer's health tab, or
+> the upstream reverse proxy. `/healthz` is always anonymous.
 
 Matching `.env` (kept out of git):
 

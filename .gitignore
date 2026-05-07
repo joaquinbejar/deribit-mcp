@@ -3,5 +3,5 @@ target/
 .vscode/
 .DS_Store
 *.swp
-.env
-.env.local
+.env*
+!.env.example

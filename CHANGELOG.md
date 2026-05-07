@@ -193,7 +193,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `initialize` request, asserts the response shape (protocol version,
   serverInfo, capabilities), and verifies graceful EOF shutdown.
 - Reference Compose recipe + env template (`docker-compose.yml`,
-  `.env.example`) per `doc/DERIBIT-INTEGRATION.md` §11.2:
+  `.env.example`):
   - `docker-compose.yml`: `image: ghcr.io/joaquinbejar/deribit-mcp:latest`,
     `restart: unless-stopped`, `command: --transport=http
     --listen=0.0.0.0:8723 --testnet` (operator flips to mainnet by
@@ -204,10 +204,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     has no shell / `curl` / `nc`; orchestrators probe `/healthz`
     from outside (k8s `httpGet`, Portainer health tab, reverse
     proxy). Inline comment in the Compose file documents this.
-  - `.env.example`: `DERIBIT_CLIENT_ID`, `DERIBIT_CLIENT_SECRET`,
-    `DERIBIT_HTTP_BEARER_TOKEN`, `RUST_LOG`. Empty values; the
-    `.env` actual file is gitignored under the existing `.env*`
-    rule (with `.env.example` allow-listed).
+  - `.env.example`: documents `DERIBIT_CLIENT_ID`,
+    `DERIBIT_CLIENT_SECRET`, `DERIBIT_HTTP_BEARER_TOKEN` (all
+    empty placeholders) and a `RUST_LOG` default that operators can
+    accept or override.
+- `.gitignore` widened from `.env` + `.env.local` to `.env*` with
+  `!.env.example` allow-listed, matching the documented policy in
+  `.env.example` and ADR-0011: a populated `.env` is never tracked
+  even when an operator chooses an unconventional filename.
+- README's docker-compose recipe drops the in-container
+  `wget` healthcheck — it never worked against the distroless image
+  shipped by v0.1-16. The README now spells out the
+  external-probe expectation, matching `docker-compose.yml`.
 - Container packaging (`Dockerfile`, `.dockerignore`) per ADR-0011:
   - Multi-stage build: `rust:1.85-slim-bookworm` builder pinned to
     MSRV → distroless `gcr.io/distroless/cc-debian12:nonroot`

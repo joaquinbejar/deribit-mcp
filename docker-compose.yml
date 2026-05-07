@@ -1,4 +1,4 @@
-# Reference docker-compose recipe for `deribit-mcp` (ADR-0011 §11.2).
+# Reference docker-compose recipe for `deribit-mcp`.
 #
 # Operators can paste this file (and `.env`) into Portainer's
 # Stacks UI as-is. Bind the published port to `127.0.0.1` and front
