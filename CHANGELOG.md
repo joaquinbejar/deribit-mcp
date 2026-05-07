@@ -73,6 +73,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - New direct dependency: `url = "2"` (shared with the upstream HTTP
   / WebSocket crates so endpoint round-tripping uses the same
   parser).
+- `rmcp` Server scaffold (`src/server.rs`): `DeribitMcpServer`
+  implements `rmcp::ServerHandler`. Pins the MCP protocol revision
+  to `2025-06-18` (exposed as `MCP_PROTOCOL_VERSION`).
+  - `initialize` advertises the documented capabilities: `tools` (no
+    `listChanged`), `resources` with `subscribe: true`, and
+    `logging`. `prompts` and `sampling` are deliberately not
+    advertised in v0.1.
+  - `tools/list`, `resources/list`, and
+    `resources/templates/list` return the (v0.1-05 empty) registry
+    snapshots; v0.1-06 / v0.1-07 fill the registries.
+  - `ping`, `shutdown`, and the rest of `ServerHandler` use the
+    `rmcp` defaults.
+- Stub `ToolRegistry` (`src/tools/mod.rs`) and `ResourceRegistry`
+  (`src/resources/mod.rs`) — empty placeholders the server holds an
+  `Arc<…>` of so v0.1-06 / v0.1-07 can land independently.
 - `CHANGELOG.md` following Keep-a-Changelog.
 
 ### Repository

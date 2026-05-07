@@ -41,3 +41,4 @@ pub mod tools;
 
 pub use crate::context::AdapterContext;
 pub use crate::error::{AdapterError, AuthFailureReason, UpstreamErrorKind};
+pub use crate::server::{DeribitMcpServer, MCP_PROTOCOL_VERSION};
