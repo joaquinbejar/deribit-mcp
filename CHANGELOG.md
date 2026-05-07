@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Live resource — `deribit://trades/{instrument}` (v0.3-04):
+  - `TradeUpdate` DTO carrying `direction`, `price`, `amount`,
+    `trade_id`, `timestamp`, plus optional `liquidation`,
+    `tick_direction`, `mark_price`, `index_price`.
+  - `TradeUpdate::batch_from_value(raw)` decodes one
+    `trades.<instrument>.raw` channel frame (a JSON array of
+    trade objects); elements that fail to decode are dropped
+    individually rather than failing the whole call.
+  - `LiveRegistry::SubscriptionEntry` gains a rolling `history:
+    Mutex<VecDeque<Value>>` capped at `HISTORY_CAPACITY = 32`
+    frames. The reader task pushes every received frame into both
+    `latest` (book / ticker) and `history` (trades). New
+    `SubscriptionHandle::history()` accessor.
+  - `ResourceRegistry::read(Trades)` subscribes, awaits the first
+    frame, then flattens the history into a chronological
+    newest-first list of `TradeUpdate`s, capped at 32.
 - Live resource — `deribit://ticker/{instrument}` (v0.3-03):
   - `TickerSnapshot` DTO carrying `mark_price`, `index_price`,
     `best_bid_price`, `best_ask_price`, `last_price`, `mark_iv`,

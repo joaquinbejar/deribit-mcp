@@ -9,7 +9,7 @@
 //! [`SubscriptionProvider`] trait so unit tests can drive a stub
 //! channel without standing up a real WebSocket.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -81,6 +81,15 @@ impl SubscriptionHandle {
     pub async fn latest(&self) -> Option<Value> {
         self.entry.latest.lock().await.clone()
     }
+
+    /// Snapshot of the rolling history (newest first). Capped at
+    /// [`HISTORY_CAPACITY`] frames so a long-running subscription
+    /// does not grow unbounded. Used by the trades resource to
+    /// return the last N trades; book / ticker callers ignore it
+    /// and rely on `latest()`.
+    pub async fn history(&self) -> Vec<Value> {
+        self.entry.history.lock().await.iter().cloned().collect()
+    }
 }
 
 impl Drop for SubscriptionHandle {
@@ -129,12 +138,17 @@ impl Drop for SubscriptionHandle {
 /// ring buffer) on top.
 #[derive(Debug)]
 pub struct SubscriptionEntry {
-    /// Upstream channel name (e.g. `book.BTC-PERPETUAL.100ms`).
+    /// Upstream channel name (e.g. `book.BTC-PERPETUAL.raw`).
     pub channel: String,
     /// Number of [`SubscriptionHandle`]s currently held.
     pub refcount: AtomicU64,
-    /// Latest decoded snapshot.
+    /// Latest decoded snapshot. Book / ticker use this; trades
+    /// resource reads from [`Self::history`] instead.
     pub latest: Mutex<Option<Value>>,
+    /// Rolling history of the last [`HISTORY_CAPACITY`] decoded
+    /// snapshots, newest first. Trades-channel readers consume
+    /// this; book / ticker callers ignore it and use `latest`.
+    pub history: Mutex<VecDeque<Value>>,
     /// Fires on every new snapshot. Subscribers count is bounded by
     /// the registry's broadcast capacity.
     pub broadcast: broadcast::Sender<()>,
@@ -142,6 +156,12 @@ pub struct SubscriptionEntry {
     /// zero so the upstream reader task drops cleanly.
     pub cancel: CancellationToken,
 }
+
+/// Maximum frames retained in [`SubscriptionEntry::history`]. Sized
+/// for the trades resource (last 32 trades is the v0.3-04 contract);
+/// book / ticker subscribers do not consult the history at all so
+/// the wasted space per entry is small.
+pub const HISTORY_CAPACITY: usize = 32;
 
 /// Shared inner state of [`LiveRegistry`]. Held behind an `Arc` so a
 /// [`SubscriptionHandle`]'s `Drop` can spawn a teardown task that
@@ -224,6 +244,7 @@ impl LiveRegistry {
             channel: channel_name_for(uri),
             refcount: AtomicU64::new(0),
             latest: Mutex::new(None),
+            history: Mutex::new(VecDeque::with_capacity(HISTORY_CAPACITY)),
             broadcast: broadcast_tx.clone(),
             cancel: cancel.clone(),
         });
@@ -256,6 +277,13 @@ impl LiveRegistry {
                     _ = task_entry.cancel.cancelled() => break,
                     item = stream.next() => match item {
                         Some(Ok(value)) => {
+                            {
+                                let mut history = task_entry.history.lock().await;
+                                if history.len() == HISTORY_CAPACITY {
+                                    history.pop_back();
+                                }
+                                history.push_front(value.clone());
+                            }
                             *task_entry.latest.lock().await = Some(value);
                             // Errors from `send` mean no receivers — fine.
                             let _ = task_entry.broadcast.send(());
@@ -458,6 +486,88 @@ impl TickerSnapshot {
             vega: greek("vega"),
             timestamp,
         })
+    }
+}
+
+/// One trade event from `trades.<instrument>.raw`.
+///
+/// Closed-set fields (`direction`, `liquidation`,
+/// `tick_direction`) carry the upstream string verbatim; the
+/// resource layer does not enumerate them as Rust enums to keep
+/// the wire shape pass-through. Adding closed-set decoders is a
+/// straight follow-up if the LLM client needs typed checks.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub struct TradeUpdate {
+    /// Trade direction (`buy` / `sell`).
+    pub direction: String,
+    /// Trade price.
+    pub price: f64,
+    /// Trade amount (contracts or coins, per Deribit docs).
+    pub amount: f64,
+    /// Upstream trade id (string per Deribit spec).
+    pub trade_id: String,
+    /// Trade timestamp, Unix epoch milliseconds.
+    pub timestamp: i64,
+    /// Liquidation marker (`""` / `M` / `T` / `MT`) when present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub liquidation: Option<String>,
+    /// Tick direction (`0` / `1` / `2` / `3`) when present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tick_direction: Option<i64>,
+    /// Mark price at trade time, when carried.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mark_price: Option<f64>,
+    /// Index price at trade time, when carried.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub index_price: Option<f64>,
+}
+
+impl TradeUpdate {
+    /// Decode one upstream trade frame element. Permissive — the
+    /// resource read layer skips elements that do not decode rather
+    /// than failing the whole call.
+    fn from_value(value: &Value) -> Option<Self> {
+        let obj = value.as_object()?;
+        let direction = obj.get("direction").and_then(Value::as_str)?.to_string();
+        let price = obj.get("price").and_then(Value::as_f64)?;
+        let amount = obj.get("amount").and_then(Value::as_f64)?;
+        let trade_id = obj.get("trade_id").and_then(|v| {
+            v.as_str()
+                .map(str::to_string)
+                .or_else(|| v.as_u64().map(|n| n.to_string()))
+        })?;
+        let timestamp = obj.get("timestamp").and_then(Value::as_i64)?;
+        Some(Self {
+            direction,
+            price,
+            amount,
+            trade_id,
+            timestamp,
+            liquidation: obj
+                .get("liquidation")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            tick_direction: obj.get("tick_direction").and_then(Value::as_i64),
+            mark_price: obj.get("mark_price").and_then(Value::as_f64),
+            index_price: obj.get("index_price").and_then(Value::as_f64),
+        })
+    }
+
+    /// Decode an upstream `trades.<instrument>.raw` channel frame.
+    /// The frame's payload is a JSON array of trade objects;
+    /// elements that fail to decode are dropped (the LLM still
+    /// sees the rest).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AdapterError::Validation`] when the payload is
+    /// not a JSON array.
+    pub fn batch_from_value(value: &Value) -> Result<Vec<Self>, AdapterError> {
+        let array = value
+            .as_array()
+            .ok_or_else(|| AdapterError::validation("trades", "expected JSON array"))?;
+        Ok(array.iter().filter_map(Self::from_value).collect())
     }
 }
 
