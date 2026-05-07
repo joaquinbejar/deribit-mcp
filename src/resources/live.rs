@@ -416,14 +416,18 @@ pub struct TickerSnapshot {
     /// Black-Scholes vega (options only).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vega: Option<f64>,
-    /// Snapshot timestamp, Unix epoch milliseconds.
-    pub timestamp: i64,
+    /// Snapshot timestamp, Unix epoch milliseconds. `None` when
+    /// the upstream omits it (rare in practice — the documented
+    /// channel always sets a timestamp — but a permissive decoder
+    /// is safer than a fabricated `0`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timestamp: Option<i64>,
 }
 
 impl TickerSnapshot {
     /// Decode an upstream `ticker.<instrument>.100ms` WS frame
     /// payload. Permissive — every numeric field is optional and
-    /// upstream omissions become `None`.
+    /// upstream omissions become `None` (including `timestamp`).
     ///
     /// **Greeks** (`delta`, `gamma`, `vega`) live inside an inner
     /// `greeks` object on options frames; this decoder pulls them
@@ -438,10 +442,7 @@ impl TickerSnapshot {
             .as_object()
             .ok_or_else(|| AdapterError::validation("ticker", "expected JSON object"))?;
         let f64_at = |key: &str| obj.get(key).and_then(Value::as_f64);
-        let timestamp = obj
-            .get("timestamp")
-            .and_then(Value::as_i64)
-            .unwrap_or_default();
+        let timestamp = obj.get("timestamp").and_then(Value::as_i64);
         let greeks = obj.get("greeks").and_then(Value::as_object);
         let greek = |key: &str| greeks.and_then(|g| g.get(key)).and_then(Value::as_f64);
         Ok(Self {
