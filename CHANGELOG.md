@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Subscription update notifications + throttle (v0.3-05):
+  - New `NotificationSink` trait. The live registry calls
+    `sink.notify(&uri)` post-throttle every time a subscribed
+    URI produces a new snapshot. `LiveRegistry::set_notification_sink(...)`
+    installs / detaches the sink at runtime; the MCP server impl
+    is expected to wire this to rmcp's `Peer::notify_resource_updated`
+    (`rmcp::service::server`) so connected clients receive
+    `notifications/resources/updated` per the MCP 2025-06-18 spec.
+  - `DEFAULT_NOTIFY_INTERVAL = 100 ms` (≈ 10 Hz). The
+    coalescing throttle suppresses intermediate frames within
+    the window; the next `resources/read` returns the latest
+    snapshot. `LiveRegistry::set_notify_interval(d)` overrides
+    the cadence, including `Duration::ZERO` to disable
+    throttling entirely.
+  - `SubscriptionEntry` carries a per-URI `last_notified`
+    `Instant` so the throttle is per-resource (a busy book
+    channel does not starve a quiet ticker channel).
 - Live resource — `deribit://trades/{instrument}` (v0.3-04):
   - `TradeUpdate` DTO carrying `direction`, `price`, `amount`,
     `trade_id`, `timestamp`, plus optional `liquidation`,
