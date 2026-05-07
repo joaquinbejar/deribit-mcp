@@ -42,6 +42,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `DERIBIT_HTTP_BEARER_TOKEN`, `DERIBIT_LOG_FORMAT`.
   - Secrets (`client_secret`, `http_bearer_token`) env/`.env` only
     (no CLI flags to prevent argv leakage).
+- Observability (`src/observability.rs`): `tracing` setup with secret
+  redaction per `rules/global_rules.md` (Logging & Observability):
+  - Dual log format: text (stderr for stdio mode) / JSON (stdout for HTTP).
+  - `RUST_LOG` env filter (INFO default).
+  - Field-level redaction layer for `client_secret`, `access_token`,
+    `refresh_token`, `http_bearer_token`.
+  - Structured logging via `FmtSpan::NEW | FmtSpan::CLOSE` for span events.
+  - [`init(config)`] initializes the global subscriber from Config.
 - `CHANGELOG.md` following Keep-a-Changelog.
 
 ### Repository

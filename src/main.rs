@@ -16,13 +16,14 @@ use anyhow::Result;
 use deribit_mcp::config::Config;
 
 fn main() -> Result<()> {
-    let _config = Config::load()?;
+    let config = Config::load()?;
+
+    deribit_mcp::observability::init(&config);
 
     // The async runtime + transport selection wiring lands in v0.1-08 /
-    // v0.1-09. v0.1-02 loads the config; subsequent issues wire it up.
-    eprintln!(
-        "deribit-mcp v{} — config loaded; transport wiring lands in v0.1-08/v0.1-09.",
-        env!("CARGO_PKG_VERSION")
-    );
+    // v0.1-09. v0.1-02 loads the config; v0.1-03 sets up observability;
+    // subsequent issues wire up the runtime and transports.
+    tracing::info!("deribit-mcp starting; transport wiring lands in v0.1-08/v0.1-09");
+
     Ok(())
 }
