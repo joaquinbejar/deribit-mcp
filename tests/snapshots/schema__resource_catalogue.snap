@@ -1,0 +1,26 @@
+---
+source: tests/schema.rs
+expression: "serde_json::json!({ \"resources\": entries, \"templates\": templates, })"
+---
+resources:
+  - description: Static list of Deribit currency symbols and metadata.
+    mimeType: application/json
+    name: Deribit currency catalogue
+    uri: "deribit://currencies"
+templates:
+  - description: "Live order book for an instrument. Read returns AdapterError::Internal { reason: \"live resources land in v0.3\" } until v0.3 wires the WebSocket transport."
+    mimeType: application/json
+    name: "Deribit order book (live, v0.3+)"
+    uriTemplate: "deribit://book/{instrument}"
+  - description: Static list of instruments for a given currency.
+    mimeType: application/json
+    name: Deribit instruments by currency
+    uriTemplate: "deribit://instruments/{currency}"
+  - description: "Live ticker for an instrument. Read returns AdapterError::Internal { reason: \"live resources land in v0.3\" } until v0.3 wires the WebSocket transport."
+    mimeType: application/json
+    name: "Deribit ticker (live, v0.3+)"
+    uriTemplate: "deribit://ticker/{instrument}"
+  - description: "Live trades for an instrument. Read returns AdapterError::Internal { reason: \"live resources land in v0.3\" } until v0.3 wires the WebSocket transport."
+    mimeType: application/json
+    name: "Deribit last trades (live, v0.3+)"
+    uriTemplate: "deribit://trades/{instrument}"

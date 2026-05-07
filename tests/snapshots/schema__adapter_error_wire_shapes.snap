@@ -1,0 +1,55 @@
+---
+source: tests/schema.rs
+expression: serialised
+---
+- - auth_missing_credentials
+  - kind: Auth
+    reason: missing_credentials
+- - auth_unauthorized
+  - kind: Auth
+    reason: unauthorized
+- - auth_token_refresh_failed
+  - kind: Auth
+    reason: token_refresh_failed
+- - auth_other
+  - kind: Auth
+    reason: other
+- - rate_limited
+  - kind: RateLimited
+    retry_after_ms: 2000
+- - upstream_api
+  - kind: Upstream
+    source:
+      code: 10000
+      message: boom
+      transport: api
+- - upstream_network
+  - kind: Upstream
+    source:
+      message: dns
+      transport: network
+- - upstream_http
+  - kind: Upstream
+    source:
+      message: 5xx
+      transport: http
+- - upstream_websocket
+  - kind: Upstream
+    source:
+      message: closed
+      transport: websocket
+- - validation
+  - field: instrument_name
+    kind: Validation
+    message: must be non-empty
+- - size_cap_exceeded
+  - cap: 10000
+    kind: SizeCapExceeded
+    requested: 25000
+- - not_enabled
+  - flag: "--allow-trading"
+    kind: NotEnabled
+    tool: place_order
+- - internal
+  - kind: Internal
+    reason: upstream payload schema mismatch
