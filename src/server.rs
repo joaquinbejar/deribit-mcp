@@ -207,8 +207,9 @@ mod tests {
     fn server_holds_registries() {
         let server = DeribitMcpServer::new(ctx());
         // Without credentials only `Read` tools register; v0.1-10
-        // contributes five public market-data tools.
-        assert_eq!(server.tools.len(), 5);
+        // contributes five per-instrument tools and v0.1-11 nine
+        // summaries / meta tools.
+        assert_eq!(server.tools.len(), 14);
         // Resource catalogue carries the static currencies entry plus
         // the four templates per the v0.1 roadmap.
         assert_eq!(server.resources.resources().len(), 1);

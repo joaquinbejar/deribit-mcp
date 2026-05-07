@@ -351,9 +351,11 @@ mod tests {
     #[test]
     fn build_without_creds_includes_only_read() {
         let registry = ToolRegistry::build(&ctx(false, false));
-        // v0.1-10 ships 5 Read-class tools; Account / Trading
-        // families remain empty because v0.2 / v0.4 have not landed.
-        assert_eq!(registry.len(), 5);
+        // v0.1-10 ships 5 per-instrument tools and v0.1-11 ships 9
+        // summary / meta tools — 14 Read-class tools total. Account /
+        // Trading families remain empty because v0.2 / v0.4 have not
+        // landed.
+        assert_eq!(registry.len(), 14);
         for tool in registry.list() {
             let entry = registry.get(tool.name.as_ref()).expect("entry");
             assert_eq!(entry.class, ToolClass::Read, "{}", tool.name);
