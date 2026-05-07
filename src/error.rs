@@ -105,29 +105,38 @@ pub enum AdapterError {
 }
 
 /// Why authentication failed. Closed set — exhaustive matches required.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+///
+/// Drops [`Copy`] (was present in v0.1) because
+/// [`Self::ScopeInsufficient`] now carries the missing scope name as
+/// a `String` payload so the LLM client can surface it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum AuthFailureReason {
-    /// Credentials missing — neither client_id nor client_secret were
-    /// configured.
+    /// Credentials missing — neither `client_id` nor `client_secret`
+    /// were configured. Surfaces when an `Account` / `Trading` tool
+    /// is called against an anonymous adapter.
     MissingCredentials,
-    /// Credentials present but rejected by Deribit.
+    /// Credentials present but rejected by Deribit (HTTP `401` or
+    /// upstream JSON-RPC code `10004`).
     Unauthorized,
-    /// Token refresh / fork failed mid-session.
-    TokenRefreshFailed,
     /// A previously valid token expired and the upstream refresh
     /// flow could not obtain a replacement (network error during
-    /// refresh, refresh-token revoked, …). Distinct from
-    /// [`Self::TokenRefreshFailed`] which covers the explicit
-    /// `exchange_token` / `fork_token` flows.
+    /// refresh, refresh token revoked, OAuth provider timeout, …).
     TokenExpiredAndRefreshFailed,
-    /// Account scope does not permit the requested action (e.g.
-    /// trading scope missing on a `Trading` call). Surfaced from
-    /// the upstream API error code set.
-    InsufficientScope,
-    /// Adapter recognised the upstream auth error but couldn't classify
-    /// it any further.
-    Other,
+    /// Account suspended on Deribit's side (e.g. KYC failure,
+    /// regulatory hold). Distinct from `Unauthorized` so the LLM
+    /// can advise the user to contact support rather than retry.
+    Suspended,
+    /// The configured credentials authenticated successfully but the
+    /// requested operation needs a scope that was not granted (e.g.
+    /// a `Trading` tool call without `trade:read_write`). The
+    /// payload names the scope the LLM should ask the operator to
+    /// add to the API key.
+    ScopeInsufficient {
+        /// Scope name as documented by Deribit (`trade:read_write`,
+        /// `account:read`, `wallet:read_write`, …).
+        needed: String,
+    },
 }
 
 /// Structured upstream-error payload. Closed set.
@@ -186,9 +195,7 @@ impl AdapterError {
 impl From<HttpError> for AdapterError {
     fn from(err: HttpError) -> Self {
         match err {
-            HttpError::AuthenticationFailed(_) => AdapterError::Auth {
-                reason: AuthFailureReason::Unauthorized,
-            },
+            HttpError::AuthenticationFailed(message) => classify_auth_failure(&message),
             HttpError::RateLimitExceeded => AdapterError::RateLimited {
                 retry_after_ms: DEFAULT_RATE_LIMIT_RETRY_MS,
             },
@@ -205,6 +212,66 @@ impl From<HttpError> for AdapterError {
             }
         }
     }
+}
+
+/// Classify a free-text upstream auth-failure message into the
+/// closed-set [`AuthFailureReason`] surface. Pattern-matches on the
+/// Deribit-documented codes / phrases without leaking the raw body.
+///
+/// Mapping (per `doc/DERIBIT-INTEGRATION.md` §3.3):
+///
+/// - `10005` / `account is suspended` → [`AuthFailureReason::Suspended`].
+/// - `13009` / `unauthorized scope` / `scope insufficient` →
+///   [`AuthFailureReason::ScopeInsufficient`].
+/// - `13004` / `invalid_token` / `token expired` →
+///   [`AuthFailureReason::TokenExpiredAndRefreshFailed`].
+/// - everything else (including `10004`, `401`, anything explicitly
+///   marked unauthorized) → [`AuthFailureReason::Unauthorized`].
+#[cold]
+#[inline(never)]
+fn classify_auth_failure(message: &str) -> AdapterError {
+    let lower = message.to_ascii_lowercase();
+
+    if lower.contains("10005") || lower.contains("suspend") {
+        return AdapterError::Auth {
+            reason: AuthFailureReason::Suspended,
+        };
+    }
+    if lower.contains("13009") || lower.contains("scope") {
+        let needed = extract_scope(&lower).unwrap_or_else(|| "unknown".to_string());
+        return AdapterError::Auth {
+            reason: AuthFailureReason::ScopeInsufficient { needed },
+        };
+    }
+    if lower.contains("13004")
+        || lower.contains("invalid_token")
+        || lower.contains("token expired")
+        || lower.contains("token has expired")
+    {
+        return AdapterError::Auth {
+            reason: AuthFailureReason::TokenExpiredAndRefreshFailed,
+        };
+    }
+
+    AdapterError::Auth {
+        reason: AuthFailureReason::Unauthorized,
+    }
+}
+
+/// Pull the scope name out of an upstream "scope insufficient"
+/// message of shape `... scope <name> ...` or `... needs <name> ...`.
+/// Returns `None` when the message format does not embed a scope.
+fn extract_scope(lower: &str) -> Option<String> {
+    for marker in ["scope ", "needs ", "requires "] {
+        if let Some(idx) = lower.find(marker) {
+            let rest = &lower[idx + marker.len()..];
+            let token = rest
+                .split(|c: char| c.is_whitespace() || c == '"' || c == '\'' || c == ',' || c == '.')
+                .find(|s| !s.is_empty())?;
+            return Some(token.to_string());
+        }
+    }
+    None
 }
 
 impl From<WebSocketError> for AdapterError {
@@ -303,14 +370,54 @@ mod tests {
         for reason in [
             AuthFailureReason::MissingCredentials,
             AuthFailureReason::Unauthorized,
-            AuthFailureReason::TokenRefreshFailed,
             AuthFailureReason::TokenExpiredAndRefreshFailed,
-            AuthFailureReason::InsufficientScope,
-            AuthFailureReason::Other,
+            AuthFailureReason::Suspended,
+            AuthFailureReason::ScopeInsufficient {
+                needed: "trade:read_write".to_string(),
+            },
         ] {
             let err = AdapterError::Auth { reason };
             assert_eq!(err, round_trip(&err));
         }
+    }
+
+    #[test]
+    fn http_authentication_failed_classifies_suspended() {
+        let err: AdapterError =
+            HttpError::AuthenticationFailed("api error 10005: account suspended".into()).into();
+        assert_eq!(
+            err,
+            AdapterError::Auth {
+                reason: AuthFailureReason::Suspended
+            }
+        );
+    }
+
+    #[test]
+    fn http_authentication_failed_classifies_scope_insufficient() {
+        let err: AdapterError =
+            HttpError::AuthenticationFailed("api error 13009: scope trade:read_write".into())
+                .into();
+        assert_eq!(
+            err,
+            AdapterError::Auth {
+                reason: AuthFailureReason::ScopeInsufficient {
+                    needed: "trade:read_write".to_string(),
+                }
+            }
+        );
+    }
+
+    #[test]
+    fn http_authentication_failed_classifies_token_expired() {
+        let err: AdapterError =
+            HttpError::AuthenticationFailed("api error 13004: invalid_token".into()).into();
+        assert_eq!(
+            err,
+            AdapterError::Auth {
+                reason: AuthFailureReason::TokenExpiredAndRefreshFailed,
+            }
+        );
     }
 
     #[test]
@@ -381,6 +488,8 @@ mod tests {
 
     #[test]
     fn http_authentication_failed_maps_to_auth_unauthorized() {
+        // Anything that does not match a more specific marker falls
+        // back to `Unauthorized` — the v0.1 default.
         let err: AdapterError = HttpError::AuthenticationFailed("bad creds".into()).into();
         assert_eq!(
             err,

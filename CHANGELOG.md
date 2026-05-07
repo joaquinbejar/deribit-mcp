@@ -24,9 +24,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     OAuth client-credentials flow lazily, caches the token, and
     refreshes ~30 s before `expires_in` (handled inside
     `deribit-http`).
-  - `AuthFailureReason` gains `TokenExpiredAndRefreshFailed` and
-    `InsufficientScope` variants for the v0.2 auth-error mapping
-    (v0.2-05 wires the upstream-error → variant routing).
+  - `AuthFailureReason` reshaped for v0.2-05 — the v0.1
+    placeholder set is replaced with the closed set the spec
+    requires:
+    - `MissingCredentials` (env not set).
+    - `Unauthorized` (HTTP 401 / upstream code `10004`).
+    - `TokenExpiredAndRefreshFailed` (`13004` / `invalid_token`
+      / `token has expired`).
+    - `Suspended` (account suspended / KYC hold / regulatory; code
+      `10005`).
+    - `ScopeInsufficient { needed: String }` (`13009`; the payload
+      names the scope the LLM should ask the operator to add).
+    `From<HttpError>` for `AdapterError` now classifies an
+    `AuthenticationFailed` message into one of the above via a
+    code / phrase scan, never leaking the raw upstream body. Drops
+    the `TokenRefreshFailed` and `Other` placeholder variants from
+    v0.1 (pre-v1.0 breaking change).
+  - `AuthFailureReason` no longer derives `Copy` —
+    `ScopeInsufficient` carries a `String`. Existing `match` arms
+    that took `AuthFailureReason` by value still work; downstream
+    callers that depended on `Copy` borrow instead.
   - Integration tests
     (`first_private_call_triggers_oauth_against_mock`,
     `second_private_call_reuses_token`) drive the full OAuth +
