@@ -1,0 +1,72 @@
+name: coverage
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: coverage-${{ github.ref }}
+  cancel-in-progress: true
+
+# Least-privilege token. Codecov upload runs against a project-scoped
+# secret and does not need any GitHub-side write permission.
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: short
+
+jobs:
+  tarpaulin:
+    name: cargo-tarpaulin → Codecov
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    # Codecov v5 prefers OIDC over a static `CODECOV_TOKEN`; the
+    # action mints an ID token via `actions/github-script`, which
+    # requires the workflow to grant `id-token: write` on this job.
+    # The repo-level read-only default in the top-level `permissions`
+    # block stays put — only this job ramps up.
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6 # v2.7.8
+        with:
+          shared-key: coverage
+
+      - name: Install cargo-tarpaulin
+        uses: taiki-e/install-action@cca35edeb1d01366c2843b68fc3ca441446d73d3 # v2
+        with:
+          tool: cargo-tarpaulin
+
+      - name: Run tarpaulin
+        env:
+          LOGLEVEL: WARN
+        run: |
+          cargo tarpaulin \
+            --workspace \
+            --all-features \
+            --timeout 120 \
+            --out Xml \
+            --output-dir coverage \
+            --skip-clean
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@cf3f51a67d2820f7a7cefa0831889fbbef41ca57 # v5.4.1
+        with:
+          files: coverage/cobertura.xml
+          fail_ci_if_error: false
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
