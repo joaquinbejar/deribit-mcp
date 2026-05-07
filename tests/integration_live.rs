@@ -199,8 +199,9 @@ async fn two_clients_each_send_their_own_subscribe() {
             .unwrap();
         let _ack = recv_text(&mut rx).await.expect("ack");
     }
-    // Give the second connection's task a beat to bump the counter.
-    tokio::time::sleep(Duration::from_millis(20)).await;
+    // The mock bumps `subscribe_count` *before* writing the ack, so
+    // by the time both `recv_text` calls have returned the counter
+    // is already at 2 — no sleep needed.
     assert_eq!(mock.subscribe_count(), 2);
 }
 
