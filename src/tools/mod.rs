@@ -9,6 +9,12 @@
 //! The registry is built once at startup from the configured class set.
 //! A tool absent from the registry is uninvokable; this is the first
 //! line of defence for the trading opt-in (ADR-0010).
+//!
+//! v0.1-05 ships an empty placeholder [`ToolRegistry`] so the `rmcp`
+//! Server scaffold can hold an `Arc<ToolRegistry>`. v0.1-06 fills in
+//! the real macro-driven registration plumbing.
+
+use rmcp::model::Tool;
 
 pub mod account;
 pub mod public;
@@ -20,7 +26,6 @@ pub mod trading;
 /// runtime field — the registry refuses to register a `Trading` tool
 /// without the corresponding feature gate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[non_exhaustive]
 pub enum ToolClass {
     /// Read-only public market data. No auth required.
     Read,
@@ -28,4 +33,41 @@ pub enum ToolClass {
     Account,
     /// Trading-class actions. Requires `--allow-trading` and credentials.
     Trading,
+}
+
+/// Registry of MCP tools the server exposes.
+///
+/// Frozen for the lifetime of the process: built at startup, read
+/// concurrently by every dispatch. The v0.1-05 implementation is an
+/// empty stub; v0.1-06 replaces it with the real handler-keyed
+/// dispatcher.
+#[derive(Debug, Default, Clone)]
+pub struct ToolRegistry {
+    tools: Vec<Tool>,
+}
+
+impl ToolRegistry {
+    /// Construct an empty registry.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Snapshot the current tool list for a `tools/list` response.
+    #[must_use]
+    pub fn list(&self) -> Vec<Tool> {
+        self.tools.clone()
+    }
+
+    /// Number of registered tools.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.tools.len()
+    }
+
+    /// Whether the registry has any tools registered.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.tools.is_empty()
+    }
 }
