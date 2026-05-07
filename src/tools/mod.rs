@@ -81,7 +81,8 @@ pub type ToolHandlerFn =
 ///
 /// Fields are `pub(crate)` so external callers cannot bypass
 /// [`ToolRegistry::call`]'s class gate by invoking the handler
-/// directly.
+/// directly. Read-only accessors expose the bits external callers
+/// (integration tests, listing) actually need.
 #[derive(Clone)]
 pub struct ToolEntry {
     /// MCP `Tool` descriptor (name, description, schemas) returned by
@@ -91,6 +92,20 @@ pub struct ToolEntry {
     pub(crate) class: ToolClass,
     /// Async handler invoked by `tools/call`.
     pub(crate) handler: ToolHandlerFn,
+}
+
+impl ToolEntry {
+    /// MCP `Tool` descriptor returned by `tools/list`.
+    #[must_use]
+    pub fn descriptor(&self) -> &Tool {
+        &self.descriptor
+    }
+
+    /// Effect class of this tool.
+    #[must_use]
+    pub fn class(&self) -> ToolClass {
+        self.class
+    }
 }
 
 impl std::fmt::Debug for ToolEntry {

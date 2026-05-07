@@ -192,6 +192,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the server over a pair of `tokio::io::duplex` pipes, sends one
   `initialize` request, asserts the response shape (protocol version,
   serverInfo, capabilities), and verifies graceful EOF shutdown.
+- End-to-end integration tests (`tests/integration.rs`):
+  - `tools_list_without_creds_includes_only_read_class` — registry
+    gating sanity check.
+  - `tools_call_get_ticker_returns_upstream_payload` — drives a
+    `mockito` HTTP server, exercises the full handler / upstream
+    HTTP / JSON deserialise path.
+  - `tools_call_unknown_returns_validation` — registry miss path.
+  - `tools_call_trading_without_allow_trading_returns_not_enabled`
+    — guards the ADR-0010 opt-in (Trading absent from registry
+    when `--allow-trading` is unset).
+  - `resources_read_currencies_returns_upstream_payload` — covers
+    the static-resource → upstream HTTP path with mockito.
+  - `resources_read_live_uri_returns_internal_until_v03` — `Book`
+    URI yields the v0.3 placeholder error.
+  - The MCP wire handshake is covered by the existing
+    `tests/stdio_handshake.rs` and `tests/http_transport.rs`
+    integration tests; this file focuses on the tool / resource
+    registries behind a `call` / `read`.
+- New dev-dependency: `mockito = "1"` for the upstream HTTP stub.
+- Read-only accessors on `ToolEntry` (`descriptor()`, `class()`)
+  expose what external integration tests need without giving up the
+  frozen-after-build invariant on the underlying fields.
 - Schema snapshot tests (`tests/schema.rs`, `tests/snapshots/`):
   - `tool_input_schemas_unchanged` snapshots every public-tool input
     schema produced by `schemars`, sorted by tool name.
