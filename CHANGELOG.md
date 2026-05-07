@@ -50,6 +50,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `refresh_token`, `http_bearer_token`.
   - Structured logging via `FmtSpan::NEW | FmtSpan::CLOSE` for span events.
   - [`init(config)`] initializes the global subscriber from Config.
+- `AdapterContext` (`src/context.rs`): the shared value every handler
+  holds an `Arc<…>` of. Owns the resolved `Config`, the eagerly
+  constructed `deribit_http::DeribitHttpClient`, and a lazy
+  `tokio::sync::OnceCell<deribit_websocket::DeribitWebSocketClient>`
+  for v0.3 live resources.
+  - `AdapterContext::new(Arc<Config>) -> Result<Self, AdapterError>`.
+  - `has_credentials()` gate for the `Account` / `Trading` tool families.
+  - `websocket()` async accessor with single-init semantics.
+- `AdapterError` (`src/error.rs`): the only error type that crosses the
+  MCP boundary. Closed-set, structured variants — `_` arms forbidden.
+  - Variants: `Auth`, `RateLimited`, `Upstream`, `Validation`,
+    `SizeCapExceeded`, `NotEnabled`, `Internal`.
+  - `AuthFailureReason` and `UpstreamErrorKind` closed-set helpers.
+  - `From` impls for `deribit_http::HttpError`,
+    `deribit_websocket::error::WebSocketError`, and `serde_json::Error`
+    so upstream errors map at the boundary.
+  - serde-tagged (`{"kind": "..."}`) representation for stable wire
+    JSON; round-trip identity verified per variant.
+  - Convenience constructors (`validation`, `rate_limited`,
+    `not_enabled`, `internal`) marked `#[cold] #[inline(never)]`.
+- New direct dependency: `url = "2"` (shared with the upstream HTTP
+  / WebSocket crates so endpoint round-tripping uses the same
+  parser).
 - `CHANGELOG.md` following Keep-a-Changelog.
 
 ### Repository

@@ -68,6 +68,11 @@ dotenvy = "0.15"
 # Binary main only — bubbles up startup failures to a printed exit message.
 anyhow = "1"
 
+# URL parsing — shared with the upstream `deribit-http` and
+# `deribit-websocket` crates so endpoint round-tripping uses the same
+# parser semantics.
+url = "2"
+
 # Sibling Deribit Rust family. Auth, rate limiting, reconnect, wire codecs all
 # live upstream — this crate is a thin adapter (ADR-0001).
 deribit-base = "0.3"

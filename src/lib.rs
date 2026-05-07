@@ -40,4 +40,4 @@ pub mod server;
 pub mod tools;
 
 pub use crate::context::AdapterContext;
-pub use crate::error::AdapterError;
+pub use crate::error::{AdapterError, AuthFailureReason, UpstreamErrorKind};
