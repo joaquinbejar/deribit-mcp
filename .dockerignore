@@ -1,0 +1,29 @@
+# Build artefacts.
+target/
+**/*.rs.bk
+
+# Version-control + CI metadata not needed inside the image.
+.git/
+.gitignore
+.github/
+
+# Local-only Claude / IDE / editor noise.
+.claude/
+.idea/
+.vscode/
+
+# Documentation — not shipped in the image.
+doc/
+rules/
+*.md
+README.tpl
+codecov.yml
+
+# Secrets / env files — never bake credentials into the image.
+.env
+.env.*
+!.env.example
+
+# Test artefacts.
+coverage/
+tests/snapshots/
