@@ -192,6 +192,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the server over a pair of `tokio::io::duplex` pipes, sends one
   `initialize` request, asserts the response shape (protocol version,
   serverInfo, capabilities), and verifies graceful EOF shutdown.
+- README polish:
+  - "v0.1 is a placeholder release" warning gone — v0.1 ships the
+    documented public Read tools, both transports, the static
+    resource catalogue, distroless image, Compose recipe, CI, and
+    GHCR/crates.io release wiring.
+  - Tool list updated to match the actual v0.1 catalogue (14 tools
+    across `v0.1-10` and `v0.1-11`, including
+    `get_book_summary_by_*`, `get_last_trades`,
+    `get_tradingview_chart_data`, `get_funding_rate_history`,
+    `get_historical_volatility`).
+  - Build-status badge URL fixed for the new GitHub Actions API
+    shape and pointed at the `ci.yml` workflow that actually runs.
+  - Both Quick-start blocks (Claude Desktop / Docker) gained a
+    "Verify" section: a concrete `tools/list` ask for the desktop
+    flow, a `curl /healthz` smoke for the container flow.
+  - Project-structure block adds `http_transport.rs`, `tests/`,
+    `.github/workflows/`. Stale `doc/` references that the public
+    repo doesn't ship are dropped.
 - Tag-driven release workflow (`.github/workflows/release.yml`):
   - Triggered by pushing a `vX.Y.Z` tag (e.g. `git tag v0.1.0
     && git push origin v0.1.0`).
