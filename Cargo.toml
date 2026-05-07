@@ -56,7 +56,11 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"]
 # Serialization + schema.
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-schemars = "0.8"
+# Pinned to the same major as the version `rmcp` re-exports
+# (`rmcp::schemars`) so tool input structs deriving `JsonSchema`
+# interoperate with `Tool::with_input_schema::<T>()` without two-major
+# linkage in the dependency graph.
+schemars = "1"
 
 # Errors.
 thiserror = "2"
