@@ -17,9 +17,11 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use rmcp::ServiceExt;
 use rmcp::transport::io::stdio;
+use tokio_util::sync::CancellationToken;
 
 use deribit_mcp::config::{Config, Transport};
 use deribit_mcp::context::AdapterContext;
+use deribit_mcp::http_transport;
 use deribit_mcp::observability;
 use deribit_mcp::server::DeribitMcpServer;
 
@@ -40,7 +42,7 @@ async fn main() -> Result<()> {
         AdapterContext::new(Arc::new(config.clone())).context("building adapter context")?,
     );
 
-    let server = DeribitMcpServer::new(ctx);
+    let server = DeribitMcpServer::new(ctx.clone());
 
     match config.transport {
         Transport::Stdio => {
@@ -59,8 +61,35 @@ async fn main() -> Result<()> {
             tracing::info!(?reason, "stdio service stopped");
         }
         Transport::Http => {
-            tracing::error!("HTTP transport lands in v0.1-09");
-            anyhow::bail!("HTTP transport not yet implemented (v0.1-09)");
+            let listen = config.http_listen;
+            let bearer_status = if config.http_bearer_token.is_some() {
+                "set"
+            } else {
+                "none"
+            };
+            tracing::info!(
+                target: "deribit_mcp::startup",
+                env = env_label,
+                endpoint = %endpoint,
+                transport = "http",
+                listen = %listen,
+                bearer = bearer_status,
+                "starting on {env_label} ({endpoint}); transport=http; listen={listen}; bearer={bearer_status}"
+            );
+
+            let cancel = CancellationToken::new();
+            let cancel_signal = cancel.clone();
+            let cfg = Arc::new(config);
+            tokio::spawn(async move {
+                if let Ok(()) = tokio::signal::ctrl_c().await {
+                    tracing::info!("ctrl-c received; shutting down HTTP transport");
+                    cancel_signal.cancel();
+                }
+            });
+
+            http_transport::serve(cfg, ctx, cancel)
+                .await
+                .context("HTTP transport")?;
         }
     }
 

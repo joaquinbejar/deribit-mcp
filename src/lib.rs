@@ -33,6 +33,7 @@
 pub mod config;
 pub mod context;
 pub mod error;
+pub mod http_transport;
 pub mod observability;
 pub mod prelude;
 pub mod resources;
