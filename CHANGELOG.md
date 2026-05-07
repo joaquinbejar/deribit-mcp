@@ -28,6 +28,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `rustfmt.toml` mirroring sibling-crate conventions.
 - `.gitignore` extended to cover IDE / editor / OS noise and `.env*`
   files.
+- Configuration loader (`src/config.rs`): CLI + env + `.env` resolution
+  per `doc/DERIBIT-INTEGRATION.md` §2 (ADR-0004, ADR-0009, ADR-0011):
+  - [`Config`]: Deribit endpoint, credentials, trading flags, transport,
+    HTTP listen address, bearer token, log format.
+  - `--testnet` / `--mainnet` for endpoint selection (testnet default).
+  - `--client-id`, `--allow-trading`, `--max-order-usd`, `--transport`,
+    `--listen`, `--log-format`, `--env-file` CLI flags.
+  - Environment variable fallbacks: `DERIBIT_ENDPOINT`,
+    `DERIBIT_CLIENT_ID`, `DERIBIT_CLIENT_SECRET`,
+    `DERIBIT_ALLOW_TRADING`, `DERIBIT_MAX_ORDER_USD`,
+    `DERIBIT_MCP_TRANSPORT`, `DERIBIT_HTTP_LISTEN`,
+    `DERIBIT_HTTP_BEARER_TOKEN`, `DERIBIT_LOG_FORMAT`.
+  - Secrets (`client_secret`, `http_bearer_token`) env/`.env` only
+    (no CLI flags to prevent argv leakage).
 - `CHANGELOG.md` following Keep-a-Changelog.
 
 ### Repository
