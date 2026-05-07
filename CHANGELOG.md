@@ -192,6 +192,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the server over a pair of `tokio::io::duplex` pipes, sends one
   `initialize` request, asserts the response shape (protocol version,
   serverInfo, capabilities), and verifies graceful EOF shutdown.
+- Tag-driven release workflow (`.github/workflows/release.yml`):
+  - Triggered by `git push <vX.Y.Z>` tags only.
+  - `image` job builds the container with Docker Buildx, pushes it
+    to GHCR (`ghcr.io/<owner>/<repo>`) tagged `:vX.Y.Z` and
+    `:latest`, attaches OCI labels (title / source / revision /
+    version), and smoke-tests the published artefact via
+    `docker run … --version`.
+  - GHCR auth uses `secrets.GITHUB_TOKEN`; `permissions:
+    packages: write` is granted on the image job only. The
+    repo-wide read-only `permissions:` default stays put.
+  - `cache-from` / `cache-to: type=gha,mode=max` reuses the
+    Buildx cache across release runs.
+  - `crates_publish` job runs after the image job is green
+    (`needs: image`). It dry-runs `cargo publish` first to surface
+    metadata errors before shipping, then publishes the real crate
+    via `secrets.CARGO_REGISTRY_TOKEN`. A failing image build
+    blocks the crate publish.
 - GitHub Actions CI (`.github/workflows/ci.yml`,
   `.github/workflows/coverage.yml`):
   - `ci.yml` jobs: `fmt-check`, `lint` (`cargo clippy
