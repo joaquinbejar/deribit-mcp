@@ -18,9 +18,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `DERIBIT_CLIENT_ID` / `DERIBIT_CLIENT_SECRET` are missing —
     `--ignored` reruns on a developer laptop without secrets do
     not turn red.
-  - No `eprintln!` of response bodies / credentials; the adapter's
-    tracing redaction layer (v0.1-03) keeps secret material out of
-    logs even at TRACE.
+  - Every upstream call wrapped in `tokio::time::timeout` (30 s)
+    so the test never hangs on a stalled network.
+  - No `eprintln!` of response bodies / credentials; assertion
+    failure messages render only a `shape_of` summary (kind +
+    array len / object key count) so a panicking diagnostic does
+    not dump testnet account fields. The adapter's tracing
+    redaction layer (v0.1-03) keeps secret material out of logs
+    even at TRACE.
 - OAuth wiring through `deribit-http` (`src/context.rs`,
   `src/error.rs`):
   - `AdapterContext::auth_state()` returns a typed

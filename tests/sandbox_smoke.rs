@@ -28,11 +28,59 @@
 
 use std::env;
 use std::sync::Arc;
+use std::time::Duration;
 
 use deribit_mcp::config::{Config, LogFormat, Transport};
 use deribit_mcp::context::AdapterContext;
+use deribit_mcp::error::AdapterError;
 use deribit_mcp::tools::ToolRegistry;
 use serde_json::{Value, json};
+use tokio::time::timeout;
+
+/// Per-call timeout; bigger than the testnet's typical p99 latency
+/// but well below the upper bound of "test is hung". Wrapping
+/// every `registry.call` keeps `cargo test --test sandbox_smoke
+/// -- --ignored` from blocking indefinitely on network stalls.
+const CALL_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Render a JSON `Value` as a *shape* string for assertion
+/// messages: kind plus a coarse size hint. Avoids dumping
+/// account-identifying fields into a panic message on the
+/// unhappy path.
+fn shape_of(value: &Value) -> String {
+    match value {
+        Value::Null => "null".to_string(),
+        Value::Bool(_) => "bool".to_string(),
+        Value::Number(_) => "number".to_string(),
+        Value::String(s) => format!("string(len={})", s.len()),
+        Value::Array(a) => format!("array(len={})", a.len()),
+        Value::Object(o) => format!("object(keys={})", o.len()),
+    }
+}
+
+/// Wrap an upstream `call` future with [`CALL_TIMEOUT`]. Panics
+/// on either elapsed-deadline or upstream error so the test
+/// surfaces the cause without printing the body.
+async fn call_with_timeout(
+    registry: &ToolRegistry,
+    ctx: &AdapterContext,
+    name: &str,
+    input: Value,
+) -> Value {
+    let outcome = timeout(CALL_TIMEOUT, registry.call(ctx, name, input))
+        .await
+        .unwrap_or_else(|_| {
+            panic!("{name}: timed out after {CALL_TIMEOUT:?}");
+        });
+    match outcome {
+        Ok(value) => value,
+        Err(AdapterError::Auth { reason }) => panic!("{name}: auth failed ({reason:?})"),
+        Err(AdapterError::Validation { field, .. }) => {
+            panic!("{name}: validation failed on field `{field}`")
+        }
+        Err(other) => panic!("{name}: upstream error ({other:?})"),
+    }
+}
 
 /// Read a required env var or return `None` so the smoke test can
 /// skip-not-fail. Pattern-matches `Result` to keep the credential
@@ -80,52 +128,54 @@ async fn live_testnet_account_smoke() {
     let registry = ToolRegistry::build(&ctx);
 
     // 1. Public — `get_server_time` (always available, no auth).
-    let server_time = registry
-        .call(&ctx, "get_server_time", json!({}))
-        .await
-        .expect("get_server_time");
+    let server_time = call_with_timeout(&registry, &ctx, "get_server_time", json!({})).await;
     assert!(
         server_time.is_number() || server_time.is_object(),
-        "get_server_time returned an unexpected JSON shape: {server_time}"
+        "get_server_time: unexpected shape ({})",
+        shape_of(&server_time)
     );
 
     // 2. Public — `get_ticker BTC-PERPETUAL`.
-    let ticker = registry
-        .call(
-            &ctx,
-            "get_ticker",
-            json!({"instrument_name": "BTC-PERPETUAL"}),
-        )
-        .await
-        .expect("get_ticker BTC-PERPETUAL");
+    let ticker = call_with_timeout(
+        &registry,
+        &ctx,
+        "get_ticker",
+        json!({"instrument_name": "BTC-PERPETUAL"}),
+    )
+    .await;
     let mark_price = ticker.get("mark_price").and_then(Value::as_f64);
     assert!(
         mark_price.is_some_and(|p| p > 0.0),
-        "ticker mark_price not positive (response shape: {ticker})"
+        "ticker mark_price not positive (shape: {})",
+        shape_of(&ticker)
     );
 
     // 3. Account — `get_account_summary BTC`. Drives the lazy
     //    OAuth client-credentials flow on first call.
-    let summary = registry
-        .call(&ctx, "get_account_summary", json!({"currency": "BTC"}))
-        .await
-        .expect("get_account_summary BTC");
+    let summary = call_with_timeout(
+        &registry,
+        &ctx,
+        "get_account_summary",
+        json!({"currency": "BTC"}),
+    )
+    .await;
     assert!(
         summary.is_object(),
-        "get_account_summary returned a non-object (shape: {summary})"
+        "get_account_summary: non-object response (shape: {})",
+        shape_of(&summary)
     );
 
     // 4. Account — `get_positions BTC`. Empty list is fine; the
     //    test asserts the shape is an array.
-    let positions = registry
-        .call(&ctx, "get_positions", json!({"currency": "BTC"}))
-        .await
-        .expect("get_positions BTC");
+    let positions =
+        call_with_timeout(&registry, &ctx, "get_positions", json!({"currency": "BTC"})).await;
     assert!(
         positions.is_array(),
-        "get_positions did not return an array (shape: {positions})"
+        "get_positions: non-array response (shape: {})",
+        shape_of(&positions)
     );
 
-    // Deliberately no eprintln! of the response bodies — testnet
-    // payloads still include account-identifying fields.
+    // Deliberately no eprintln! / panic-format of the response
+    // bodies — testnet payloads still include account-identifying
+    // fields. Failure messages report only JSON shape (`shape_of`).
 }
