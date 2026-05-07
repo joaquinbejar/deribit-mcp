@@ -1,0 +1,143 @@
+---
+source: tests/schema.rs
+expression: schemas
+---
+- - place_order
+  - $defs:
+      PlaceOrderType:
+        description: "Order type accepted by `place_order`.\n\nOne-to-one with the upstream `deribit_http::model::order::OrderType`\nvariants the adapter supports. `TrailingStop` is not exposed yet —\nit lacks adapter-side validation rules and ships once v0.4 stabilises."
+        oneOf:
+          - const: limit
+            description: "Limit order. Requires `price`."
+            type: string
+          - const: market
+            description: Market order.
+            type: string
+          - const: stop_limit
+            description: "Stop limit. Requires `price`, `trigger_price`, `trigger`."
+            type: string
+          - const: stop_market
+            description: "Stop market. Requires `trigger_price`, `trigger`."
+            type: string
+          - const: take_limit
+            description: "Take-profit limit. Requires `price`, `trigger_price`, `trigger`."
+            type: string
+          - const: take_market
+            description: "Take-profit market. Requires `trigger_price`, `trigger`."
+            type: string
+          - const: market_limit
+            description: Market-limit order — market with limit-price protection.
+            type: string
+      PlaceTimeInForce:
+        description: Time-in-force.
+        oneOf:
+          - const: good_til_cancelled
+            description: Default. Resting until cancelled.
+            type: string
+          - const: good_til_day
+            description: Expires at end of trading day.
+            type: string
+          - const: fill_or_kill
+            description: Fully fill immediately or cancel.
+            type: string
+          - const: immediate_or_cancel
+            description: "Fill what is possible immediately, cancel the rest."
+            type: string
+      PlaceTrigger:
+        description: Trigger reference price for stop / take variants.
+        oneOf:
+          - const: index_price
+            description: Index price.
+            type: string
+          - const: mark_price
+            description: Mark price.
+            type: string
+          - const: last_price
+            description: Last traded price.
+            type: string
+      Side:
+        description: "Buy or sell.\n\nClosed-set enum kept local to the adapter so the JSON wire shape\n(`\"buy\"` / `\"sell\"`) stays stable independent of any future\nrename in the upstream `deribit-http` `OrderSide`."
+        oneOf:
+          - const: buy
+            description: Buy.
+            type: string
+          - const: sell
+            description: Sell.
+            type: string
+    $schema: "https://json-schema.org/draft/2020-12/schema"
+    description: "`place_order` input.\n\nMirrors the parameters Deribit's `/private/buy` and\n`/private/sell` endpoints accept. Adapter-side validation runs\nbefore the upstream call: required-fields-by-order-type, finite\nnumeric values, strictly positive `amount` / `price`."
+    properties:
+      amount:
+        description: "Order amount. Finite, `> 0`. Contracts for options,\nquote-currency for futures / perpetuals (Deribit's own\nconvention — the adapter does not reinterpret it)."
+        format: double
+        type: number
+      instrument_name:
+        description: "Instrument identifier (`BTC-PERPETUAL`, `ETH-29SEP23-1500-C`,\n…). Routed to Deribit verbatim."
+        type: string
+      label:
+        description: "User-defined label echoed back on the resulting order; max 64\nchars upstream."
+        type:
+          - string
+          - "null"
+      mmp:
+        description: Market-Maker Protection flag (advanced).
+        type:
+          - boolean
+          - "null"
+      post_only:
+        description: Post-only flag — reject the order if it would cross the book.
+        type:
+          - boolean
+          - "null"
+      price:
+        description: "Limit price. Required for limit / stop_limit / take_limit.\nFinite, `> 0`."
+        format: double
+        type:
+          - number
+          - "null"
+      reduce_only:
+        description: "Reduce-only — only decrease, never flip, the position."
+        type:
+          - boolean
+          - "null"
+      reject_post_only:
+        description: "`reject_post_only` — reject (vs. amend) when `post_only`\nwould otherwise be relaxed."
+        type:
+          - boolean
+          - "null"
+      side:
+        $ref: "#/$defs/Side"
+        description: "`buy` or `sell`. Decides which upstream endpoint runs."
+      time_in_force:
+        anyOf:
+          - $ref: "#/$defs/PlaceTimeInForce"
+          - type: "null"
+        description: "Time-in-force override. Defaults upstream to `good_til_cancelled`."
+      trigger:
+        anyOf:
+          - $ref: "#/$defs/PlaceTrigger"
+          - type: "null"
+        description: "Trigger reference. Required alongside `trigger_price`."
+      trigger_price:
+        description: "Trigger price. Required for stop / take variants. Finite, `> 0`."
+        format: double
+        type:
+          - number
+          - "null"
+      type:
+        $ref: "#/$defs/PlaceOrderType"
+        description: "Order type. Required-field rules:\n- `limit` / `stop_limit` / `take_limit` → `price` is required.\n- `stop_*` / `take_*` → `trigger_price` and `trigger` required."
+      valid_until:
+        description: "Server-side TTL (Unix-ms). After this timestamp the order is\nauto-cancelled. Unsigned to match the rest of the adapter's\ntimestamp inputs (`start_timestamp` / `end_timestamp` in the\nAccount family)."
+        format: uint64
+        minimum: 0
+        type:
+          - integer
+          - "null"
+    required:
+      - instrument_name
+      - side
+      - amount
+      - type
+    title: PlaceOrderInput
+    type: object

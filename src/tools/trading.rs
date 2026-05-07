@@ -4,15 +4,435 @@
 //! refuses to register them unless **both** `DERIBIT_CLIENT_ID` /
 //! `DERIBIT_CLIENT_SECRET` credentials are configured **and**
 //! `--allow-trading` is passed (ADR-0010); `--max-order-usd` caps
-//! notional size. Actual tools land in v0.4.
+//! notional size in a future v0.4-04 step.
+//!
+//! v0.4-01 ships:
+//!
+//! - `place_order` — buy / sell with the full Deribit order parameter
+//!   surface (limit / market / stop / take, optional time-in-force,
+//!   trigger, post-only / reduce-only / mmp flags, `valid_until`).
 //!
 //! [`ToolClass::Trading`]: super::ToolClass::Trading
 
-use super::ToolRegistry;
+use std::sync::Arc;
+
+use rmcp::model::Tool;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+
+use super::schema::{parse_input as parse, schema_for};
+use super::{ToolClass, ToolEntry, ToolHandlerFn, ToolRegistry};
+use crate::context::AdapterContext;
+use crate::error::AdapterError;
 
 /// Register every `Trading` tool with the registry.
+pub fn register(registry: &mut ToolRegistry) {
+    registry.insert(place_order_tool());
+}
+
+// ----- place_order ---------------------------------------------------
+
+/// Buy or sell.
 ///
-/// v0.1-06 ships an empty body; the real registrations land in v0.4.
-pub fn register(_registry: &mut ToolRegistry) {
-    // v0.4 will populate this hook.
+/// Closed-set enum kept local to the adapter so the JSON wire shape
+/// (`"buy"` / `"sell"`) stays stable independent of any future
+/// rename in the upstream `deribit-http` `OrderSide`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum Side {
+    /// Buy.
+    Buy,
+    /// Sell.
+    Sell,
+}
+
+/// Order type accepted by `place_order`.
+///
+/// One-to-one with the upstream `deribit_http::model::order::OrderType`
+/// variants the adapter supports. `TrailingStop` is not exposed yet —
+/// it lacks adapter-side validation rules and ships once v0.4 stabilises.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum PlaceOrderType {
+    /// Limit order. Requires `price`.
+    Limit,
+    /// Market order.
+    Market,
+    /// Stop limit. Requires `price`, `trigger_price`, `trigger`.
+    StopLimit,
+    /// Stop market. Requires `trigger_price`, `trigger`.
+    StopMarket,
+    /// Take-profit limit. Requires `price`, `trigger_price`, `trigger`.
+    TakeLimit,
+    /// Take-profit market. Requires `trigger_price`, `trigger`.
+    TakeMarket,
+    /// Market-limit order — market with limit-price protection.
+    MarketLimit,
+}
+
+/// Time-in-force.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum PlaceTimeInForce {
+    /// Default. Resting until cancelled.
+    GoodTilCancelled,
+    /// Expires at end of trading day.
+    GoodTilDay,
+    /// Fully fill immediately or cancel.
+    FillOrKill,
+    /// Fill what is possible immediately, cancel the rest.
+    ImmediateOrCancel,
+}
+
+/// Trigger reference price for stop / take variants.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum PlaceTrigger {
+    /// Index price.
+    IndexPrice,
+    /// Mark price.
+    MarkPrice,
+    /// Last traded price.
+    LastPrice,
+}
+
+/// `place_order` input.
+///
+/// Mirrors the parameters Deribit's `/private/buy` and
+/// `/private/sell` endpoints accept. Adapter-side validation runs
+/// before the upstream call: required-fields-by-order-type, finite
+/// numeric values, strictly positive `amount` / `price`.
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub struct PlaceOrderInput {
+    /// Instrument identifier (`BTC-PERPETUAL`, `ETH-29SEP23-1500-C`,
+    /// …). Routed to Deribit verbatim.
+    pub instrument_name: String,
+    /// `buy` or `sell`. Decides which upstream endpoint runs.
+    pub side: Side,
+    /// Order amount. Finite, `> 0`. Contracts for options,
+    /// quote-currency for futures / perpetuals (Deribit's own
+    /// convention — the adapter does not reinterpret it).
+    pub amount: f64,
+    /// Order type. Required-field rules:
+    /// - `limit` / `stop_limit` / `take_limit` → `price` is required.
+    /// - `stop_*` / `take_*` → `trigger_price` and `trigger` required.
+    #[serde(rename = "type")]
+    pub order_type: PlaceOrderType,
+    /// Limit price. Required for limit / stop_limit / take_limit.
+    /// Finite, `> 0`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub price: Option<f64>,
+    /// Time-in-force override. Defaults upstream to `good_til_cancelled`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time_in_force: Option<PlaceTimeInForce>,
+    /// User-defined label echoed back on the resulting order; max 64
+    /// chars upstream.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    /// Trigger price. Required for stop / take variants. Finite, `> 0`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trigger_price: Option<f64>,
+    /// Trigger reference. Required alongside `trigger_price`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trigger: Option<PlaceTrigger>,
+    /// Post-only flag — reject the order if it would cross the book.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub post_only: Option<bool>,
+    /// `reject_post_only` — reject (vs. amend) when `post_only`
+    /// would otherwise be relaxed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reject_post_only: Option<bool>,
+    /// Reduce-only — only decrease, never flip, the position.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reduce_only: Option<bool>,
+    /// Market-Maker Protection flag (advanced).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mmp: Option<bool>,
+    /// Server-side TTL (Unix-ms). After this timestamp the order is
+    /// auto-cancelled. Unsigned to match the rest of the adapter's
+    /// timestamp inputs (`start_timestamp` / `end_timestamp` in the
+    /// Account family).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub valid_until: Option<u64>,
+}
+
+fn place_order_tool() -> ToolEntry {
+    let schema = schema_for::<PlaceOrderInput>();
+    let descriptor = Tool::new(
+        "place_order",
+        "Place a buy or sell order. This sends a real order to the configured Deribit endpoint.",
+        schema,
+    );
+    let handler: ToolHandlerFn = Arc::new(|ctx, input| Box::pin(handle_place_order(ctx, input)));
+    ToolEntry {
+        descriptor,
+        class: ToolClass::Trading,
+        handler,
+    }
+}
+
+async fn handle_place_order(ctx: &AdapterContext, input: Value) -> Result<Value, AdapterError> {
+    let input: PlaceOrderInput = parse(input)?;
+    validate_place_order(&input)?;
+    let (side, request) = build_order_request(input)?;
+    let result = match side {
+        Side::Buy => ctx.http.buy_order(request).await?,
+        Side::Sell => ctx.http.sell_order(request).await?,
+    };
+    Ok(serde_json::to_value(&result)?)
+}
+
+/// Adapter-side validation ahead of any network call.
+///
+/// # Errors
+///
+/// Returns [`AdapterError::Validation`] when:
+///
+/// - `amount` is non-finite or `<= 0`.
+/// - `price` is supplied non-finite or `<= 0`.
+/// - `trigger_price` is supplied non-finite or `<= 0`.
+/// - The order type requires `price` and it is missing.
+/// - The order type requires `trigger_price` / `trigger` and they
+///   are missing.
+fn validate_place_order(input: &PlaceOrderInput) -> Result<(), AdapterError> {
+    if !input.amount.is_finite() || input.amount <= 0.0 {
+        return Err(AdapterError::Validation {
+            field: "amount".to_string(),
+            message: format!("must be finite and > 0, got {}", input.amount),
+        });
+    }
+    if let Some(price) = input.price
+        && (!price.is_finite() || price <= 0.0)
+    {
+        return Err(AdapterError::Validation {
+            field: "price".to_string(),
+            message: format!("must be finite and > 0, got {price}"),
+        });
+    }
+    if let Some(tp) = input.trigger_price
+        && (!tp.is_finite() || tp <= 0.0)
+    {
+        return Err(AdapterError::Validation {
+            field: "trigger_price".to_string(),
+            message: format!("must be finite and > 0, got {tp}"),
+        });
+    }
+    let needs_price = matches!(
+        input.order_type,
+        PlaceOrderType::Limit | PlaceOrderType::StopLimit | PlaceOrderType::TakeLimit
+    );
+    if needs_price && input.price.is_none() {
+        return Err(AdapterError::Validation {
+            field: "price".to_string(),
+            message: "required for limit / stop_limit / take_limit orders".to_string(),
+        });
+    }
+    let needs_trigger = matches!(
+        input.order_type,
+        PlaceOrderType::StopLimit
+            | PlaceOrderType::StopMarket
+            | PlaceOrderType::TakeLimit
+            | PlaceOrderType::TakeMarket
+    );
+    if needs_trigger {
+        if input.trigger_price.is_none() {
+            return Err(AdapterError::Validation {
+                field: "trigger_price".to_string(),
+                message: "required for stop / take order types".to_string(),
+            });
+        }
+        if input.trigger.is_none() {
+            return Err(AdapterError::Validation {
+                field: "trigger".to_string(),
+                message: "required for stop / take order types".to_string(),
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Build the upstream `OrderRequest` plus the side-tag controlling
+/// which endpoint to hit. Closed-set matches on `PlaceOrderType` /
+/// `PlaceTimeInForce` / `PlaceTrigger` keep the conversion total.
+///
+/// # Errors
+///
+/// Returns [`AdapterError::Validation`] if `valid_until` overflows
+/// `i64` — practically unreachable for any real Unix-ms timestamp,
+/// but the upstream `OrderRequest.valid_until` is signed so the
+/// cast is checked here at the boundary instead of silently wrapping.
+fn build_order_request(
+    input: PlaceOrderInput,
+) -> Result<(Side, deribit_http::model::request::OrderRequest), AdapterError> {
+    use deribit_http::model::order::OrderType as UpType;
+    use deribit_http::model::request::OrderRequest;
+    use deribit_http::model::trigger::Trigger as UpTrigger;
+    use deribit_http::model::types::TimeInForce as UpTif;
+
+    let order_type = match input.order_type {
+        PlaceOrderType::Limit => UpType::Limit,
+        PlaceOrderType::Market => UpType::Market,
+        PlaceOrderType::StopLimit => UpType::StopLimit,
+        PlaceOrderType::StopMarket => UpType::StopMarket,
+        PlaceOrderType::TakeLimit => UpType::TakeLimit,
+        PlaceOrderType::TakeMarket => UpType::TakeMarket,
+        PlaceOrderType::MarketLimit => UpType::MarketLimit,
+    };
+    let time_in_force = input.time_in_force.map(|t| match t {
+        PlaceTimeInForce::GoodTilCancelled => UpTif::GoodTilCancelled,
+        PlaceTimeInForce::GoodTilDay => UpTif::GoodTilDay,
+        PlaceTimeInForce::FillOrKill => UpTif::FillOrKill,
+        PlaceTimeInForce::ImmediateOrCancel => UpTif::ImmediateOrCancel,
+    });
+    let trigger = input.trigger.map(|t| match t {
+        PlaceTrigger::IndexPrice => UpTrigger::IndexPrice,
+        PlaceTrigger::MarkPrice => UpTrigger::MarkPrice,
+        PlaceTrigger::LastPrice => UpTrigger::LastPrice,
+    });
+    let valid_until = match input.valid_until {
+        None => None,
+        Some(v) => Some(i64::try_from(v).map_err(|_| AdapterError::Validation {
+            field: "valid_until".to_string(),
+            message: format!("must fit in i64, got {v}"),
+        })?),
+    };
+    let req = OrderRequest {
+        order_id: None,
+        instrument_name: input.instrument_name,
+        amount: Some(input.amount),
+        contracts: None,
+        type_: Some(order_type),
+        label: input.label,
+        price: input.price,
+        time_in_force,
+        display_amount: None,
+        post_only: input.post_only,
+        reject_post_only: input.reject_post_only,
+        reduce_only: input.reduce_only,
+        trigger_price: input.trigger_price,
+        trigger_offset: None,
+        trigger,
+        advanced: None,
+        mmp: input.mmp,
+        valid_until,
+        linked_order_type: None,
+        trigger_fill_condition: None,
+        otoco_config: None,
+    };
+    Ok((input.side, req))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn limit_input() -> PlaceOrderInput {
+        PlaceOrderInput {
+            instrument_name: "BTC-PERPETUAL".to_string(),
+            side: Side::Buy,
+            amount: 10.0,
+            order_type: PlaceOrderType::Limit,
+            price: Some(50_000.0),
+            time_in_force: None,
+            label: None,
+            trigger_price: None,
+            trigger: None,
+            post_only: None,
+            reject_post_only: None,
+            reduce_only: None,
+            mmp: None,
+            valid_until: None,
+        }
+    }
+
+    #[test]
+    fn limit_without_price_rejected() {
+        let mut input = limit_input();
+        input.price = None;
+        let err = validate_place_order(&input).unwrap_err();
+        assert!(matches!(err, AdapterError::Validation { ref field, .. } if field == "price"));
+    }
+
+    #[test]
+    fn stop_limit_without_trigger_price_rejected() {
+        let mut input = limit_input();
+        input.order_type = PlaceOrderType::StopLimit;
+        input.trigger = Some(PlaceTrigger::IndexPrice);
+        let err = validate_place_order(&input).unwrap_err();
+        assert!(
+            matches!(err, AdapterError::Validation { ref field, .. } if field == "trigger_price")
+        );
+    }
+
+    #[test]
+    fn stop_limit_without_trigger_rejected() {
+        let mut input = limit_input();
+        input.order_type = PlaceOrderType::StopLimit;
+        input.trigger_price = Some(45_000.0);
+        let err = validate_place_order(&input).unwrap_err();
+        assert!(matches!(err, AdapterError::Validation { ref field, .. } if field == "trigger"));
+    }
+
+    #[test]
+    fn negative_amount_rejected() {
+        let mut input = limit_input();
+        input.amount = -1.0;
+        let err = validate_place_order(&input).unwrap_err();
+        assert!(matches!(err, AdapterError::Validation { ref field, .. } if field == "amount"));
+    }
+
+    #[test]
+    fn nan_amount_rejected() {
+        let mut input = limit_input();
+        input.amount = f64::NAN;
+        let err = validate_place_order(&input).unwrap_err();
+        assert!(matches!(err, AdapterError::Validation { ref field, .. } if field == "amount"));
+    }
+
+    #[test]
+    fn nan_price_rejected() {
+        let mut input = limit_input();
+        input.price = Some(f64::NAN);
+        let err = validate_place_order(&input).unwrap_err();
+        assert!(matches!(err, AdapterError::Validation { ref field, .. } if field == "price"));
+    }
+
+    #[test]
+    fn market_without_price_accepted() {
+        let mut input = limit_input();
+        input.order_type = PlaceOrderType::Market;
+        input.price = None;
+        validate_place_order(&input).unwrap();
+    }
+
+    #[test]
+    fn full_stop_limit_accepted() {
+        let mut input = limit_input();
+        input.order_type = PlaceOrderType::StopLimit;
+        input.trigger_price = Some(45_000.0);
+        input.trigger = Some(PlaceTrigger::MarkPrice);
+        validate_place_order(&input).unwrap();
+    }
+
+    #[test]
+    fn build_request_round_trips_buy_side() {
+        let input = limit_input();
+        let (side, req) = build_order_request(input).unwrap();
+        assert_eq!(side, Side::Buy);
+        assert_eq!(req.instrument_name, "BTC-PERPETUAL");
+        assert_eq!(req.amount, Some(10.0));
+        assert_eq!(req.price, Some(50_000.0));
+    }
+
+    #[test]
+    fn valid_until_overflow_rejected() {
+        let mut input = limit_input();
+        input.valid_until = Some(u64::MAX);
+        let err = build_order_request(input).unwrap_err();
+        assert!(
+            matches!(err, AdapterError::Validation { ref field, .. } if field == "valid_until")
+        );
+    }
 }

@@ -78,6 +78,36 @@ fn account_tool_input_schemas_unchanged() {
     insta::assert_yaml_snapshot!("account_tool_input_schemas", schemas);
 }
 
+/// Snapshot the input schema of every Trading-class tool that
+/// only registers when credentials AND `--allow-trading` are set
+/// (v0.4). Lives in
+/// `tests/snapshots/schema__trading_tool_input_schemas.snap`.
+#[test]
+fn trading_tool_input_schemas_unchanged() {
+    let with_trading = ToolRegistry::build(&ctx(true, true));
+    let with_account = ToolRegistry::build(&ctx(true, false));
+    let baseline_names: std::collections::HashSet<String> = with_account
+        .list()
+        .into_iter()
+        .map(|t| t.name.to_string())
+        .collect();
+    let mut tools: Vec<_> = with_trading
+        .list()
+        .into_iter()
+        .filter(|t| !baseline_names.contains(t.name.as_ref()))
+        .collect();
+    tools.sort_by(|a, b| a.name.cmp(&b.name));
+    let schemas: Vec<(String, serde_json::Value)> = tools
+        .into_iter()
+        .map(|tool| {
+            let name = tool.name.to_string();
+            let schema = serde_json::Value::Object((*tool.input_schema).clone());
+            (name, schema)
+        })
+        .collect();
+    insta::assert_yaml_snapshot!("trading_tool_input_schemas", schemas);
+}
+
 /// Snapshot the JSON wire shape of every documented `AdapterError`
 /// variant. The serde-tagged representation is a public contract.
 #[test]
