@@ -8,7 +8,7 @@
 [![Stars](https://img.shields.io/github/stars/joaquinbejar/deribit-mcp.svg)](https://github.com/joaquinbejar/deribit-mcp/stargazers)
 [![Issues](https://img.shields.io/github/issues/joaquinbejar/deribit-mcp.svg)](https://github.com/joaquinbejar/deribit-mcp/issues)
 [![PRs](https://img.shields.io/github/issues-pr/joaquinbejar/deribit-mcp.svg)](https://github.com/joaquinbejar/deribit-mcp/pulls)
-[![Build Status](https://img.shields.io/github/workflow/status/joaquinbejar/deribit-mcp/CI)](https://github.com/joaquinbejar/deribit-mcp/actions)
+[![CI](https://img.shields.io/github/actions/workflow/status/joaquinbejar/deribit-mcp/ci.yml?branch=main&label=CI)](https://github.com/joaquinbejar/deribit-mcp/actions/workflows/ci.yml)
 [![Coverage](https://img.shields.io/codecov/c/github/joaquinbejar/deribit-mcp)](https://codecov.io/gh/joaquinbejar/deribit-mcp)
 [![Dependencies](https://img.shields.io/librariesio/github/joaquinbejar/deribit-mcp)](https://libraries.io/github/joaquinbejar/deribit-mcp)
 [![Documentation](https://img.shields.io/badge/docs-latest-blue.svg)](https://docs.rs/deribit-mcp)
@@ -28,41 +28,36 @@ The server is a **thin adapter** over the rest of the Deribit Rust family
 [`deribit-fix`](https://crates.io/crates/deribit-fix)). It does not duplicate
 auth, rate limiting, reconnect, or wire codecs — it forwards.
 
-> ⚠️ **v0.1 is a placeholder release** that reserves the name on crates.io.
-> The implementation is being built per the design under [`doc/`](./doc/).
-
-### Key features (target v0.1)
+### Key features (v0.1)
 
 - **MCP server with both transports**: `stdio` (desktop MCP clients) and
-  `http` / SSE (daemon / container deployments).
+  Streamable HTTP / SSE (daemon / container deployments).
 - **Public read-only tools** backed by `deribit-http`: `get_ticker`,
   `get_instrument`, `list_instruments`, `get_order_book`,
-  `get_index_price`, `get_book_summary_*`, `get_currencies`,
-  `get_server_time`, `get_status`.
-- **Read-only resources**: `deribit://instruments/{currency}` and
-  `deribit://currencies` (refresh-on-read).
+  `get_index_price`, `get_book_summary_by_currency`,
+  `get_book_summary_by_instrument`, `get_currencies`, `get_server_time`,
+  `get_status`, `get_last_trades`, `get_tradingview_chart_data`,
+  `get_funding_rate_history`, `get_historical_volatility`.
+- **Read-only resources**: `deribit://currencies` and
+  `deribit://instruments/{currency}` (refresh-on-read). Live
+  resources (`book`, `ticker`, `trades`) land in v0.3.
 - **Container-friendly**: stateless distroless image, env-only configuration,
-  `/healthz` endpoint, signal-aware shutdown. See
-  [`doc/DERIBIT-INTEGRATION.md` §11](./doc/DERIBIT-INTEGRATION.md).
+  `/healthz` endpoint, SIGTERM / SIGINT graceful shutdown.
 
 ### Authentication, accounts, and trading (later milestones)
 
 - **v0.2** — Authenticated read tools (`get_account_summary`, `get_positions`,
   `get_subaccounts`, `get_transaction_log`, `get_deposits`, `get_withdrawals`).
-  Credentials via env / `.env`; **never** via tool arguments
-  ([ADR-0004](./doc/adr/0004-credentials-out-of-band.md)).
+  Credentials via env / `.env`; **never** via tool arguments (ADR-0004).
 - **v0.3** — Live resources (`deribit://book/{instrument}`,
   `deribit://ticker/{instrument}`, `deribit://trades/{instrument}`)
   backed by `deribit-websocket`.
 - **v0.4** — Trading tools (`place_order`, `edit_order`, `cancel_order`,
-  `cancel_all_*`) gated by `--allow-trading`
-  ([ADR-0010](./doc/adr/0010-trading-tools-opt-in.md)). Optional notional
+  `cancel_all_*`) gated by `--allow-trading` (ADR-0010). Optional notional
   cap via `--max-order-usd`.
 - **v0.5** — MCP `prompts` capability for curated workflows.
 - **v0.6** — Optional FIX path for low-latency order entry via
   `--order-transport=fix`.
-
-See [`doc/ROADMAP.md`](./doc/ROADMAP.md) for the full plan.
 
 ### Installation
 
@@ -103,6 +98,18 @@ Add to your Claude Desktop MCP config (typically
 `--allow-trading` is **off** by default; only public read-only tools are
 visible until v0.2 ships authenticated reads.
 
+#### Verify (Claude Desktop)
+
+After restarting Claude Desktop, open a chat and ask the agent to
+`tools/list`. You should see the v0.1 public Read tools (`get_ticker`,
+`get_instrument`, …). Try:
+
+> Use the `deribit` server's `get_ticker` tool to look up
+> `BTC-PERPETUAL`.
+
+The agent should return a structured ticker payload with
+`mark_price`, `best_bid_price`, `best_ask_price`, …
+
 ### Quick start — Docker / Portainer (http)
 
 Reference `docker-compose.yml`:
@@ -126,16 +133,34 @@ services:
 > outside the container — k8s `httpGet`, Portainer's health tab, or
 > the upstream reverse proxy. `/healthz` is always anonymous.
 
-Matching `.env` (kept out of git):
+Matching `.env` (gitignored under the `.env*` rule, with
+`!.env.example` allow-listed):
 
 ```env
 DERIBIT_CLIENT_ID=...
 DERIBIT_CLIENT_SECRET=...
 DERIBIT_HTTP_BEARER_TOKEN=...
+RUST_LOG=info,deribit_mcp=debug
 ```
 
-Full Portainer recipe in
-[`doc/DERIBIT-INTEGRATION.md` §11](./doc/DERIBIT-INTEGRATION.md).
+Reference templates ship in this repo at `docker-compose.yml` and
+`.env.example`.
+
+#### Verify (Docker / Portainer)
+
+Once the stack is up, the unauthenticated liveness probe answers
+200 from outside the container:
+
+```bash
+curl -sf http://127.0.0.1:8723/healthz
+# → ok
+```
+
+When `DERIBIT_HTTP_BEARER_TOKEN` is set, every request to `/mcp`
+must carry `Authorization: Bearer <token>` (mismatches return
+`401`). `/healthz` is always anonymous so container orchestration
+probes never need a credential, and unknown paths surface a normal
+`404` without requiring authentication either.
 
 ### Configuration
 
@@ -156,36 +181,25 @@ Full Portainer recipe in
 CLI flags exist for everything **except** `client_secret` and the HTTP bearer
 token — secrets must flow via env or `.env`. Passing a secret on the command
 line would put it in the parent process's `argv`, visible to other users on
-the same host. See [ADR-0004](./doc/adr/0004-credentials-out-of-band.md).
+the same host (ADR-0004).
 
 ### Project structure
 
 ```
 src/
-  main.rs           — binary entry point: arg parsing, transport selection
-  lib.rs            — re-exports for integration tests
-  config.rs         — CLI args + env / .env resolution (dotenvy)
-  context.rs        — AdapterContext: shared upstream clients
-  error.rs          — AdapterError + From impls for upstream errors
-  server.rs         — rmcp Server impl: initialize, tools/list, resources/list
-  observability.rs  — tracing setup, secret redaction
+  main.rs            — binary entry point: arg parsing, transport
+  lib.rs             — re-exports for integration tests
+  config.rs          — CLI args + env / .env resolution (dotenvy)
+  context.rs         — AdapterContext: shared upstream clients
+  error.rs           — AdapterError + From impls for upstream errors
+  server.rs          — rmcp ServerHandler: initialize, list, capabilities
+  http_transport.rs  — axum router + Streamable HTTP service + bearer
+  observability.rs   — tracing setup, secret redaction
   tools/{public,account,trading}.rs
   resources/{static_,live}.rs
-doc/                — design docs, ADRs, specs
-.claude/            — agents, commands, settings, issues
+tests/               — integration tests (stdio, http, schema, …)
+.github/workflows/   — ci.yml, coverage.yml, release.yml
 ```
-
-Authoritative documentation lives under [`doc/`](./doc/):
-
-- [`PRD.md`](./doc/PRD.md) — vision, scope, NFRs.
-- [`ARCHITECTURE.md`](./doc/ARCHITECTURE.md) — module map, layering.
-- [`DOMAIN-MODEL.md`](./doc/DOMAIN-MODEL.md) — tools / resources catalogue.
-- [`MCP-SPEC.md`](./doc/MCP-SPEC.md) — MCP wire surface.
-- [`DERIBIT-INTEGRATION.md`](./doc/DERIBIT-INTEGRATION.md) — upstream wiring,
-  Docker / Portainer recipe.
-- [`TESTING.md`](./doc/TESTING.md) — test pyramid.
-- [`ROADMAP.md`](./doc/ROADMAP.md) — versioned deliverables.
-- [`adr/`](./doc/adr/) — Architecture Decision Records (ADRs 0001..0011).
 
 ### Companion crates
 
