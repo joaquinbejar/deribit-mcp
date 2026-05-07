@@ -192,6 +192,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the server over a pair of `tokio::io::duplex` pipes, sends one
   `initialize` request, asserts the response shape (protocol version,
   serverInfo, capabilities), and verifies graceful EOF shutdown.
+- Schema snapshot tests (`tests/schema.rs`, `tests/snapshots/`):
+  - `tool_input_schemas_unchanged` snapshots every public-tool input
+    schema produced by `schemars`, sorted by tool name.
+  - `adapter_error_wire_shapes_unchanged` snapshots the JSON wire
+    shape of every documented `AdapterError` variant (the
+    serde-tagged `{"kind": "..."}` representation is part of the
+    public contract).
+  - `resource_catalogue_unchanged` snapshots the static-entry +
+    URI-template payload of `resources/list` /
+    `resources/templates/list`.
+  - Snapshots live under `tests/snapshots/` and are reviewed
+    deliberately on every PR; any change requires a CHANGELOG line
+    flagging "additive" vs "breaking" per `doc/TESTING.md` §3.
+- New dev-dependency: `insta = "1"` with the `yaml` and `redactions`
+  features.
 - Graceful shutdown + signal handling (`src/main.rs`):
   - Single shared `tokio_util::sync::CancellationToken` drives shutdown
     for both transports.

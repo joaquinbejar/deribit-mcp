@@ -1,0 +1,202 @@
+---
+source: tests/schema.rs
+expression: schemas
+---
+- - get_book_summary_by_currency
+  - $schema: "https://json-schema.org/draft/2020-12/schema"
+    description: "`get_book_summary_by_currency` input."
+    properties:
+      currency:
+        description: "Currency symbol, e.g. `BTC`."
+        type: string
+      kind:
+        description: "Optional instrument-kind filter: `future`, `option`, `spot`,\n`future_combo`, `option_combo`."
+        type:
+          - string
+          - "null"
+    required:
+      - currency
+    title: GetBookSummaryByCurrencyInput
+    type: object
+- - get_book_summary_by_instrument
+  - $schema: "https://json-schema.org/draft/2020-12/schema"
+    description: "`get_book_summary_by_instrument` input."
+    properties:
+      instrument_name:
+        description: Instrument identifier.
+        type: string
+    required:
+      - instrument_name
+    title: GetBookSummaryByInstrumentInput
+    type: object
+- - get_currencies
+  - $schema: "https://json-schema.org/draft/2020-12/schema"
+    description: "`get_currencies` input — empty."
+    title: GetCurrenciesInput
+    type: object
+- - get_funding_rate_history
+  - $schema: "https://json-schema.org/draft/2020-12/schema"
+    description: "`get_funding_rate_history` input."
+    properties:
+      end_timestamp:
+        description: "End of the window, Unix epoch milliseconds."
+        format: uint64
+        minimum: 0
+        type: integer
+      instrument_name:
+        description: "Perpetual instrument identifier (e.g. `BTC-PERPETUAL`)."
+        type: string
+      start_timestamp:
+        description: "Start of the window, Unix epoch milliseconds."
+        format: uint64
+        minimum: 0
+        type: integer
+    required:
+      - instrument_name
+      - start_timestamp
+      - end_timestamp
+    title: GetFundingRateHistoryInput
+    type: object
+- - get_historical_volatility
+  - $schema: "https://json-schema.org/draft/2020-12/schema"
+    description: "`get_historical_volatility` input."
+    properties:
+      currency:
+        description: "Currency symbol (`BTC`, `ETH`)."
+        type: string
+    required:
+      - currency
+    title: GetHistoricalVolatilityInput
+    type: object
+- - get_index_price
+  - $schema: "https://json-schema.org/draft/2020-12/schema"
+    description: "`get_index_price` input."
+    properties:
+      index_name:
+        description: "Index name, e.g. `btc_usd`, `eth_usd`."
+        type: string
+    required:
+      - index_name
+    title: GetIndexPriceInput
+    type: object
+- - get_instrument
+  - $schema: "https://json-schema.org/draft/2020-12/schema"
+    description: "`get_instrument` input."
+    properties:
+      instrument_name:
+        description: "Instrument identifier, e.g. `BTC-PERPETUAL`."
+        type: string
+    required:
+      - instrument_name
+    title: GetInstrumentInput
+    type: object
+- - get_last_trades
+  - $schema: "https://json-schema.org/draft/2020-12/schema"
+    description: "`get_last_trades` input."
+    properties:
+      count:
+        description: How many trades to return (upstream caps at ~1 000).
+        format: uint32
+        minimum: 0
+        type:
+          - integer
+          - "null"
+      include_old:
+        description: "When `true`, include trades from before the last archive boundary."
+        type:
+          - boolean
+          - "null"
+      instrument_name:
+        description: Instrument identifier.
+        type: string
+    required:
+      - instrument_name
+    title: GetLastTradesInput
+    type: object
+- - get_order_book
+  - $schema: "https://json-schema.org/draft/2020-12/schema"
+    description: "`get_order_book` input."
+    properties:
+      depth:
+        description: "Order book depth per side (1, 5, 10, 20, 50, 100, 1000,\n10000). Defaults to upstream's default (5) when omitted."
+        format: uint32
+        minimum: 0
+        type:
+          - integer
+          - "null"
+      instrument_name:
+        description: Instrument identifier.
+        type: string
+    required:
+      - instrument_name
+    title: GetOrderBookInput
+    type: object
+- - get_server_time
+  - $schema: "https://json-schema.org/draft/2020-12/schema"
+    description: "`get_server_time` input — empty."
+    title: GetServerTimeInput
+    type: object
+- - get_status
+  - $schema: "https://json-schema.org/draft/2020-12/schema"
+    description: "`get_status` input — empty."
+    title: GetStatusInput
+    type: object
+- - get_ticker
+  - $schema: "https://json-schema.org/draft/2020-12/schema"
+    description: "`get_ticker` input."
+    properties:
+      instrument_name:
+        description: "Instrument identifier, e.g. `BTC-PERPETUAL` or\n`BTC-31MAY24-50000-C`."
+        type: string
+    required:
+      - instrument_name
+    title: GetTickerInput
+    type: object
+- - get_tradingview_chart_data
+  - $schema: "https://json-schema.org/draft/2020-12/schema"
+    description: "`get_tradingview_chart_data` input."
+    properties:
+      end_timestamp:
+        description: "End of the window, Unix epoch milliseconds."
+        format: uint64
+        minimum: 0
+        type: integer
+      instrument_name:
+        description: Instrument identifier.
+        type: string
+      resolution:
+        description: "Bar resolution: `1`, `3`, `5`, `10`, `15`, `30`, `60`, `120`,\n`180`, `360`, `720`, `1D`."
+        type: string
+      start_timestamp:
+        description: "Start of the window, Unix epoch milliseconds."
+        format: uint64
+        minimum: 0
+        type: integer
+    required:
+      - instrument_name
+      - start_timestamp
+      - end_timestamp
+      - resolution
+    title: GetTradingViewChartDataInput
+    type: object
+- - list_instruments
+  - $schema: "https://json-schema.org/draft/2020-12/schema"
+    description: "`list_instruments` input."
+    properties:
+      currency:
+        description: "Currency symbol to list instruments for, e.g. `BTC`."
+        type: string
+      expired:
+        description: "When `true`, include expired instruments. Defaults to `false`."
+        type:
+          - boolean
+          - "null"
+      kind:
+        description: "Optional kind filter: `future`, `option`, `spot`,\n`future_combo`, `option_combo`."
+        type:
+          - string
+          - "null"
+    required:
+      - currency
+    title: ListInstrumentsInput
+    type: object

@@ -95,6 +95,10 @@ deribit-websocket = { version = "0.3", default-features = false, features = ["ru
 
 [dev-dependencies]
 tokio = { version = "1", features = ["test-util"] }
+# Snapshot review for tool input-schemas and `AdapterError` wire shape.
+# Snapshots are committed under `tests/snapshots/` and reviewed
+# deliberately on every PR.
+insta = { version = "1", features = ["yaml", "redactions"] }
 
 [profile.release]
 opt-level = 3
