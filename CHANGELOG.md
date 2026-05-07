@@ -33,6 +33,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     private-call round-trip against `mockito` and assert the auth
     endpoint is hit exactly once across multiple private calls.
 
+- Account `Read` tool family — first cut (`src/tools/account.rs`):
+  - `get_account_summary { currency, extended? }` — balance /
+    equity / margin for one currency.
+  - `get_positions { currency?, kind?, subaccount_id? }` — open
+    positions, optionally filtered.
+  - `get_subaccounts { with_portfolio? }` — subaccount list.
+  - All carry `ToolClass::Account`. The registry omits them
+    entirely when credentials are absent (ADR-0003), and the
+    bearer-token gate at dispatch time provides defence-in-depth.
+  - Integration tests cover registry gating
+    (`account_tools_register_only_with_credentials`),
+    end-to-end dispatch through `mockito`
+    (`account_summary_tool_dispatches_through_registry`), and the
+    no-credentials → registry-miss path
+    (`account_summary_without_credentials_is_validation_error`).
+  - Schema snapshot extended with a separate
+    `account_tool_input_schemas` snapshot for the new family.
+
 - Project skeleton, dependency set, and module tree per
   `doc/ARCHITECTURE.md` §2:
   - `Cargo.toml` with the v0.1 dependency set: `rmcp`, `tokio`,

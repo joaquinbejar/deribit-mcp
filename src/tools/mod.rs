@@ -30,6 +30,7 @@ use crate::error::AdapterError;
 
 pub mod account;
 pub mod public;
+pub mod schema;
 pub mod trading;
 
 /// Effect class of an MCP tool.
