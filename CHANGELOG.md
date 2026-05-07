@@ -107,13 +107,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Per-family registration hooks (`src/tools/{public,account,trading}.rs`)
   are empty in v0.1-06 — v0.1-10 / v0.1-11 / v0.2 / v0.4 fill them.
 - Public `Read` tools — market data (`src/tools/public.rs`):
-  - `get_ticker { instrument_name }` — latest ticker.
-  - `get_instrument { instrument_name }` — static metadata.
-  - `list_instruments { currency, kind?, expired? }` — instruments
-    by currency, filterable.
-  - `get_order_book { instrument_name, depth? }` — order book
-    snapshot.
-  - `get_index_price { index_name }` — current index price.
+  - **v0.1-10** (per-instrument):
+    - `get_ticker { instrument_name }` — latest ticker.
+    - `get_instrument { instrument_name }` — static metadata.
+    - `list_instruments { currency, kind?, expired? }` — instruments
+      by currency, filterable.
+    - `get_order_book { instrument_name, depth? }` — order book
+      snapshot.
+    - `get_index_price { index_name }` — current index price.
+  - **v0.1-11** (summaries & meta):
+    - `get_book_summary_by_currency { currency, kind? }` —
+      best-bid/ask + 24 h stats for every instrument of a currency.
+    - `get_book_summary_by_instrument { instrument_name }` — same for
+      one instrument.
+    - `get_currencies` — supported-currencies catalogue.
+    - `get_server_time` — Deribit server time (epoch ms).
+    - `get_status` — platform-wide status (locked currencies).
+    - `get_last_trades { instrument_name, count?, include_old? }` —
+      recent trades.
+    - `get_tradingview_chart_data { instrument_name, start_timestamp,
+      end_timestamp, resolution }` — OHLCV bars.
+    - `get_funding_rate_history { instrument_name, start_timestamp,
+      end_timestamp }` — funding-rate time series.
+    - `get_historical_volatility { currency }` — realised volatility
+      `[ts_ms, value]` pairs.
   - Each tool: typed `Input` with `JsonSchema`, `Read` effect class,
     `serde_json::Value` output carrying the upstream JSON verbatim.
   - Bad input → `AdapterError::Validation { field: "arguments", ... }`
