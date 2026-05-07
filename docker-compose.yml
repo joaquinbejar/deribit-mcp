@@ -1,0 +1,43 @@
+# Reference docker-compose recipe for `deribit-mcp`.
+#
+# Operators can paste this file (and `.env`) into Portainer's
+# Stacks UI as-is. Bind the published port to `127.0.0.1` and front
+# the service with a TLS-terminating reverse proxy.
+#
+# Defaults: testnet, HTTP transport on 0.0.0.0:8723 inside the
+# container, no trading. Flip to mainnet by replacing `--testnet`
+# with `--mainnet`, and opt in to trading by adding
+# `--allow-trading` plus a `--max-order-usd=<N>` cap.
+
+services:
+  deribit-mcp:
+    image: ghcr.io/joaquinbejar/deribit-mcp:latest
+    container_name: deribit-mcp
+    restart: unless-stopped
+
+    command:
+      - "--transport=http"
+      - "--listen=0.0.0.0:8723"
+      - "--testnet"
+
+    env_file:
+      - .env
+
+    # Carry an extra optional secret from the host shell when the
+    # operator wants to gate the `/mcp` endpoint with a static
+    # bearer token (ADR-0004 — env-only, never a CLI flag).
+    environment:
+      DERIBIT_HTTP_BEARER_TOKEN: ${DERIBIT_HTTP_BEARER_TOKEN:-}
+      RUST_LOG: ${RUST_LOG:-info,deribit_mcp=debug}
+
+    ports:
+      # Bind to loopback only; reverse-proxy in front of the host.
+      - "127.0.0.1:8723:8723"
+
+    # No in-container HEALTHCHECK: the runtime image is distroless
+    # (no shell, no `curl` / `wget` / `nc`). Orchestrators probe
+    # `GET /healthz` from outside the container instead — k8s
+    # `httpGet`, Portainer's "Health Check" tab, an upstream nginx,
+    # etc. The `/healthz` endpoint always returns 200 OK while the
+    # server accepts requests; it is unauthenticated even when a
+    # bearer token is configured (see `src/http_transport.rs`).
