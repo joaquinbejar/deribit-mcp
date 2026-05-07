@@ -2,6 +2,28 @@
 source: tests/schema.rs
 expression: schemas
 ---
+- - cancel_all_by_currency
+  - $schema: "https://json-schema.org/draft/2020-12/schema"
+    description: "`cancel_all_by_currency` input.\n\nMass-cancels every open order in the given currency. Use with\ncare — this is irreversible."
+    properties:
+      currency:
+        description: "Currency to mass-cancel orders for (`BTC`, `ETH`, `USDC`, …)."
+        type: string
+    required:
+      - currency
+    title: CancelAllByCurrencyInput
+    type: object
+- - cancel_all_by_instrument
+  - $schema: "https://json-schema.org/draft/2020-12/schema"
+    description: "`cancel_all_by_instrument` input."
+    properties:
+      instrument_name:
+        description: "Instrument identifier (`BTC-PERPETUAL`, …)."
+        type: string
+    required:
+      - instrument_name
+    title: CancelAllByInstrumentInput
+    type: object
 - - cancel_order
   - $schema: "https://json-schema.org/draft/2020-12/schema"
     description: "`cancel_order` input."

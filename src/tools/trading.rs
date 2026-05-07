@@ -31,6 +31,8 @@ pub fn register(registry: &mut ToolRegistry) {
     registry.insert(place_order_tool());
     registry.insert(edit_order_tool());
     registry.insert(cancel_order_tool());
+    registry.insert(cancel_all_by_currency_tool());
+    registry.insert(cancel_all_by_instrument_tool());
 }
 
 // ----- place_order ---------------------------------------------------
@@ -516,6 +518,95 @@ async fn handle_cancel_order(ctx: &AdapterContext, input: Value) -> Result<Value
     }
     let result = ctx.http.cancel_order(order_id).await?;
     Ok(serde_json::to_value(&result)?)
+}
+
+// ----- cancel_all_by_currency ---------------------------------------
+
+/// `cancel_all_by_currency` input.
+///
+/// Mass-cancels every open order in the given currency. Use with
+/// care — this is irreversible.
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub struct CancelAllByCurrencyInput {
+    /// Currency to mass-cancel orders for (`BTC`, `ETH`, `USDC`, …).
+    pub currency: String,
+}
+
+fn cancel_all_by_currency_tool() -> ToolEntry {
+    let schema = schema_for::<CancelAllByCurrencyInput>();
+    let descriptor = Tool::new(
+        "cancel_all_by_currency",
+        "Mass-cancel every open order for a currency. Returns the number of orders cancelled. \
+         Irreversible — use with care.",
+        schema,
+    );
+    let handler: ToolHandlerFn =
+        Arc::new(|ctx, input| Box::pin(handle_cancel_all_by_currency(ctx, input)));
+    ToolEntry {
+        descriptor,
+        class: ToolClass::Trading,
+        handler,
+    }
+}
+
+async fn handle_cancel_all_by_currency(
+    ctx: &AdapterContext,
+    input: Value,
+) -> Result<Value, AdapterError> {
+    let input: CancelAllByCurrencyInput = parse(input)?;
+    let currency = input.currency.trim();
+    if currency.is_empty() {
+        return Err(AdapterError::Validation {
+            field: "currency".to_string(),
+            message: "must be non-empty".to_string(),
+        });
+    }
+    let cancelled = ctx.http.cancel_all_by_currency(currency).await?;
+    Ok(serde_json::json!({ "cancelled": cancelled }))
+}
+
+// ----- cancel_all_by_instrument -------------------------------------
+
+/// `cancel_all_by_instrument` input.
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub struct CancelAllByInstrumentInput {
+    /// Instrument identifier (`BTC-PERPETUAL`, …).
+    pub instrument_name: String,
+}
+
+fn cancel_all_by_instrument_tool() -> ToolEntry {
+    let schema = schema_for::<CancelAllByInstrumentInput>();
+    let descriptor = Tool::new(
+        "cancel_all_by_instrument",
+        "Mass-cancel every open order on an instrument. Returns the number of orders cancelled. \
+         Irreversible — use with care.",
+        schema,
+    );
+    let handler: ToolHandlerFn =
+        Arc::new(|ctx, input| Box::pin(handle_cancel_all_by_instrument(ctx, input)));
+    ToolEntry {
+        descriptor,
+        class: ToolClass::Trading,
+        handler,
+    }
+}
+
+async fn handle_cancel_all_by_instrument(
+    ctx: &AdapterContext,
+    input: Value,
+) -> Result<Value, AdapterError> {
+    let input: CancelAllByInstrumentInput = parse(input)?;
+    let instrument = input.instrument_name.trim();
+    if instrument.is_empty() {
+        return Err(AdapterError::Validation {
+            field: "instrument_name".to_string(),
+            message: "must be non-empty".to_string(),
+        });
+    }
+    let cancelled = ctx.http.cancel_all_by_instrument(instrument).await?;
+    Ok(serde_json::json!({ "cancelled": cancelled }))
 }
 
 #[cfg(test)]

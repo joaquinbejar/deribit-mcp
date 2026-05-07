@@ -9,6 +9,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `cancel_all_by_currency` and `cancel_all_by_instrument`
+  Trading-class tools (v0.4-03):
+  - `cancel_all_by_currency { currency }` →
+    `deribit_http::cancel_all_by_currency`. Returns
+    `{"cancelled": <count>}`.
+  - `cancel_all_by_instrument { instrument_name }` →
+    `deribit_http::cancel_all_by_instrument`. Returns the same
+    shape.
+  - Tool descriptions warn the LLM that the call is irreversible
+    and cancels every matching open order.
+  - The `kind` / `type` filter mentioned in the issue brief is
+    not exposable yet — `deribit-http 0.7` does not surface
+    those parameters on the per-currency / per-instrument
+    endpoints (only on `cancel_all_by_kind_or_type`). Filtering
+    will land alongside the upstream parameter expansion;
+    documented as a deferred follow-up.
+  - Trading schema snapshot updated; new integration tests
+    `cancel_all_by_currency_dispatches_through_registry` and
+    `cancel_all_by_instrument_dispatches_through_registry`
+    cover the happy path against `mockito`.
+
 - `edit_order` and `cancel_order` Trading-class tools (v0.4-02):
   - `edit_order` modifies `amount`, `price`, `post_only`,
     `reject_post_only`, `reduce_only`, `mmp`, `valid_until`,
