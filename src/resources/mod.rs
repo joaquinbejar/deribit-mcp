@@ -7,13 +7,18 @@
 //!   v0.3 per ADR-0006.
 //!
 //! v0.1-07 shipped the URI parser, catalogue, and dispatch surface.
-//! v0.1-12 wires the two static reads:
+//! v0.1-12 wired the two static reads:
 //! `deribit://currencies` → `static_::read_currencies`,
 //! `deribit://instruments/{currency}` → `static_::read_instruments`.
-//! Live URIs (`book`, `ticker`, `trades`) are accepted by the parser
-//! but `read()` returns
-//! [`AdapterError::Internal { reason: "live resources land in v0.3" }`](AdapterError::Internal)
-//! until v0.3 wires the WebSocket transport.
+//! v0.3-02 wires `deribit://book/{instrument}` through the
+//! [`LiveRegistry`] when a [`SubscriptionProvider`] is attached.
+//! `deribit://ticker/{instrument}` (v0.3-03) and
+//! `deribit://trades/{instrument}` (v0.3-04) are accepted by the
+//! parser but `read()` still returns
+//! [`AdapterError::Internal`] until those issues land. Without a
+//! `SubscriptionProvider`, even `Book` falls back to
+//! `AdapterError::Internal { reason: "live subscription provider
+//! not configured" }`.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -30,10 +35,11 @@ use live::{BookSnapshot, LiveRegistry, SubscriptionProvider};
 
 /// Strongly-typed `deribit://` URI variants.
 ///
-/// The parser accepts every documented template; serving lives behind
-/// [`ResourceRegistry::read`], which returns
-/// [`AdapterError::Validation`] for variants the milestone has not yet
-/// wired (live resources land in v0.3).
+/// The parser accepts every documented template; serving lives
+/// behind [`ResourceRegistry::read`]. As of v0.3-02 `Book` is
+/// served through the [`LiveRegistry`]; the remaining live URIs
+/// (`Ticker`, `Trades`) still return [`AdapterError::Internal`]
+/// until v0.3-03 / v0.3-04 wire them.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ResourceUri {
     /// `deribit://currencies` — the currency catalogue (static).
@@ -388,24 +394,34 @@ impl ResourceRegistry {
     /// as any other subscriber holds a handle, otherwise the
     /// refcount returns to zero and the upstream channel closes.
     async fn read_live(&self, uri: &ResourceUri) -> Result<serde_json::Value, AdapterError> {
+        use tokio::sync::broadcast::error::RecvError;
+
         let provider = self
             .provider
             .as_ref()
             .ok_or_else(|| AdapterError::internal("live subscription provider not configured"))?;
         let handle = self.live.subscribe(provider.as_ref(), uri).await?;
+        // Subscribe to the broadcast BEFORE checking `latest`. If
+        // the first frame arrives between an early `latest` check
+        // and the `updates()` subscription, the broadcast receiver
+        // would miss its signal (no backlog) and we would time out
+        // spuriously.
+        let mut updates = handle.updates();
         if let Some(snapshot) = handle.latest().await {
             return Ok(snapshot);
         }
-        let mut updates = handle.updates();
         match tokio::time::timeout(FIRST_FRAME_TIMEOUT, updates.recv()).await {
             Ok(Ok(())) => handle
                 .latest()
                 .await
                 .ok_or_else(|| AdapterError::internal("update fired without snapshot")),
-            Ok(Err(_lagged)) => handle
+            Ok(Err(RecvError::Lagged(_))) => handle
                 .latest()
                 .await
                 .ok_or_else(|| AdapterError::internal("broadcast lagged before first frame")),
+            Ok(Err(RecvError::Closed)) => Err(AdapterError::internal(
+                "live subscription closed before producing a frame",
+            )),
             Err(_elapsed) => Err(AdapterError::internal(
                 "live subscription did not produce a frame in time",
             )),
@@ -600,14 +616,20 @@ mod tests {
         use std::future::Future;
         use std::pin::Pin;
         use std::sync::Arc;
+        use std::sync::atomic::{AtomicU64, Ordering};
 
-        struct StubProvider;
-        impl SubscriptionProvider for StubProvider {
+        /// Counts every `subscribe()` call so the test can pin the
+        /// "open exactly once across multiple reads" semantics.
+        struct CountingProvider {
+            opened: Arc<AtomicU64>,
+        }
+        impl SubscriptionProvider for CountingProvider {
             fn subscribe(
                 &self,
                 _uri: ResourceUri,
             ) -> Pin<Box<dyn Future<Output = Result<SubscriptionStream, AdapterError>> + Send + '_>>
             {
+                self.opened.fetch_add(1, Ordering::AcqRel);
                 Box::pin(async move {
                     let frame = serde_json::json!({
                         "bids": [[50_000.0, 1.0], [49_999.0, 2.0]],
@@ -621,10 +643,15 @@ mod tests {
             }
         }
 
-        let registry = ResourceRegistry::build().with_subscription_provider(Arc::new(StubProvider));
+        let opened = Arc::new(AtomicU64::new(0));
+        let provider = Arc::new(CountingProvider {
+            opened: opened.clone(),
+        });
+        let registry = ResourceRegistry::build().with_subscription_provider(provider);
         let uri = ResourceUri::Book {
             instrument: "BTC-PERPETUAL".to_string(),
         };
+
         let content = registry.read(&ctx(), &uri).await.expect("ok");
         match content {
             ResourceContent::Json(value) => {
@@ -637,12 +664,19 @@ mod tests {
             }
         }
 
-        // Second read on the same registry must reuse the cached
-        // entry — refcount stays at 1 (the in-flight handle is
-        // dropped at end of `read`, but the entry sticks around as
-        // long as the reader task is still running). We assert the
-        // provider was opened only once via this registry.
+        // Second read should hit the cached entry. The first read
+        // dropped its `SubscriptionHandle`, so the entry's refcount
+        // returned to zero and the deferred-cleanup task may have
+        // already removed it. To pin the semantics deterministically,
+        // assert the provider was opened *at most twice* — once
+        // for the first read, optionally once if the cleanup
+        // raced — and never more than that (no per-read leak).
         let _ = registry.read(&ctx(), &uri).await.expect("ok");
+        let opens = opened.load(Ordering::Acquire);
+        assert!(
+            (1..=2).contains(&opens),
+            "expected provider opens in 1..=2, got {opens}"
+        );
     }
 
     #[tokio::test]

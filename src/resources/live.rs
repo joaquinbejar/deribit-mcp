@@ -344,11 +344,16 @@ impl BookSnapshot {
     /// 0 / empty rather than failing the call — the LLM gets a
     /// best-effort snapshot.
     ///
+    /// **Levels are skipped, not rejected.** A bid / ask entry
+    /// that is not a 2- or 3-element array of numbers (e.g. a
+    /// stray `null`, an op-only delta, …) is dropped silently and
+    /// the rest of the side is decoded. The payload as a whole
+    /// must still be a JSON object.
+    ///
     /// # Errors
     ///
-    /// Returns [`AdapterError::Validation`] when the payload is
-    /// not a JSON object or when `bids` / `asks` carry malformed
-    /// entries.
+    /// Returns [`AdapterError::Validation`] only when the payload
+    /// is not a JSON object.
     pub fn from_value(instrument: &str, value: &Value) -> Result<Self, AdapterError> {
         let obj = value
             .as_object()
