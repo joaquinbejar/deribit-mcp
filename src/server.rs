@@ -55,16 +55,18 @@ pub struct DeribitMcpServer {
 }
 
 impl DeribitMcpServer {
-    /// Construct a server scaffold with empty registries.
-    ///
-    /// v0.1-06 / v0.1-07 will replace this with builders that populate
-    /// the registries from the [`AdapterContext`].
+    /// Construct a server scaffold with the v0.1 registries built
+    /// against the provided context. Tool families are gated by
+    /// effect class (ADR-0003); the resource catalogue is populated
+    /// from the `deribit://` template set.
     #[must_use]
     pub fn new(ctx: Arc<AdapterContext>) -> Self {
+        let tools = ToolRegistry::build(&ctx);
+        let resources = ResourceRegistry::build();
         Self {
             ctx,
-            tools: Arc::new(ToolRegistry::new()),
-            resources: Arc::new(ResourceRegistry::new()),
+            tools: Arc::new(tools),
+            resources: Arc::new(resources),
         }
     }
 
@@ -202,9 +204,13 @@ mod tests {
     }
 
     #[test]
-    fn registries_are_empty_in_scaffold() {
+    fn server_holds_registries() {
         let server = DeribitMcpServer::new(ctx());
+        // Tools are empty until v0.1-10/-11 populate the families.
         assert!(server.tools.is_empty());
-        assert!(server.resources.is_empty());
+        // Resource catalogue carries the static currencies entry plus
+        // the four templates per the v0.1 roadmap.
+        assert_eq!(server.resources.resources().len(), 1);
+        assert_eq!(server.resources.templates().len(), 4);
     }
 }
