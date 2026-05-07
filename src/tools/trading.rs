@@ -370,7 +370,8 @@ fn edit_order_tool() -> ToolEntry {
     let schema = schema_for::<EditOrderInput>();
     let descriptor = Tool::new(
         "edit_order",
-        "Modify price / amount / flags of an open order.",
+        "Modify amount / price / trigger_price / valid_until / flags (post_only, \
+         reject_post_only, reduce_only, mmp) of an open order.",
         schema,
     );
     let handler: ToolHandlerFn = Arc::new(|ctx, input| Box::pin(handle_edit_order(ctx, input)));
@@ -382,8 +383,11 @@ fn edit_order_tool() -> ToolEntry {
 }
 
 async fn handle_edit_order(ctx: &AdapterContext, input: Value) -> Result<Value, AdapterError> {
-    let input: EditOrderInput = parse(input)?;
+    let mut input: EditOrderInput = parse(input)?;
     validate_edit_order(&input)?;
+    // Forward the trimmed id — leading / trailing whitespace would
+    // surface as an opaque upstream `OrderNotFound`.
+    input.order_id = input.order_id.trim().to_string();
     let request = build_edit_request(input)?;
     let result = ctx.http.edit_order(request).await?;
     Ok(serde_json::to_value(&result)?)
@@ -394,6 +398,22 @@ fn validate_edit_order(input: &EditOrderInput) -> Result<(), AdapterError> {
         return Err(AdapterError::Validation {
             field: "order_id".to_string(),
             message: "must be non-empty".to_string(),
+        });
+    }
+    let any_edit = input.amount.is_some()
+        || input.price.is_some()
+        || input.post_only.is_some()
+        || input.reject_post_only.is_some()
+        || input.reduce_only.is_some()
+        || input.mmp.is_some()
+        || input.valid_until.is_some()
+        || input.trigger_price.is_some();
+    if !any_edit {
+        return Err(AdapterError::Validation {
+            field: "arguments".to_string(),
+            message: "at least one editable field must be present (amount, price, post_only, \
+                      reject_post_only, reduce_only, mmp, valid_until, trigger_price)"
+                .to_string(),
         });
     }
     if let Some(amount) = input.amount
@@ -487,13 +507,14 @@ fn cancel_order_tool() -> ToolEntry {
 
 async fn handle_cancel_order(ctx: &AdapterContext, input: Value) -> Result<Value, AdapterError> {
     let input: CancelOrderInput = parse(input)?;
-    if input.order_id.trim().is_empty() {
+    let order_id = input.order_id.trim();
+    if order_id.is_empty() {
         return Err(AdapterError::Validation {
             field: "order_id".to_string(),
             message: "must be non-empty".to_string(),
         });
     }
-    let result = ctx.http.cancel_order(&input.order_id).await?;
+    let result = ctx.http.cancel_order(order_id).await?;
     Ok(serde_json::to_value(&result)?)
 }
 
@@ -656,6 +677,23 @@ mod tests {
         assert_eq!(req.order_id.as_deref(), Some("ORDER-1"));
         assert_eq!(req.amount, Some(20.0));
         assert_eq!(req.price, None);
+    }
+
+    #[test]
+    fn edit_no_fields_rejected() {
+        let input = EditOrderInput {
+            order_id: "ORDER-1".to_string(),
+            amount: None,
+            price: None,
+            post_only: None,
+            reject_post_only: None,
+            reduce_only: None,
+            mmp: None,
+            valid_until: None,
+            trigger_price: None,
+        };
+        let err = validate_edit_order(&input).unwrap_err();
+        assert!(matches!(err, AdapterError::Validation { ref field, .. } if field == "arguments"));
     }
 
     #[test]
