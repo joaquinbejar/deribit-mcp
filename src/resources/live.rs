@@ -14,6 +14,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, Instant};
 
 use futures_core::Stream;
 use serde_json::Value;
@@ -155,7 +156,30 @@ pub struct SubscriptionEntry {
     /// Per-entry shutdown signal — flipped when the refcount hits
     /// zero so the upstream reader task drops cleanly.
     pub cancel: CancellationToken,
+    /// Last instant the notification sink was fired for this URI.
+    /// Used by the throttle gate.
+    last_notified: Mutex<Option<Instant>>,
 }
+
+/// Sink that the live registry calls every time a subscribed URI
+/// produces a new (post-throttle) snapshot.
+///
+/// The MCP server impl wires this to `Peer::notify_resource_updated`
+/// so the connected client sees `notifications/resources/updated`
+/// per the MCP 2025-06-18 spec; tests pass a stub that just counts
+/// the calls.
+pub trait NotificationSink: Send + Sync + 'static {
+    /// Fired after the throttle gate. URI is borrowed to avoid
+    /// per-frame clones; the sink can clone if it needs to own.
+    fn notify(&self, uri: &ResourceUri);
+}
+
+/// Default per-URI notification rate. Live frames can fire much
+/// faster — `book.<i>.raw` runs at the upstream's natural cadence
+/// — and an MCP client almost never benefits from > 10 / s. The
+/// throttle coalesces intermediate frames; the latest snapshot is
+/// what `read` returns.
+pub const DEFAULT_NOTIFY_INTERVAL: Duration = Duration::from_millis(100);
 
 /// Maximum *frames* retained in [`SubscriptionEntry::history`].
 ///
@@ -170,9 +194,30 @@ pub const HISTORY_CAPACITY: usize = 32;
 /// Shared inner state of [`LiveRegistry`]. Held behind an `Arc` so a
 /// [`SubscriptionHandle`]'s `Drop` can spawn a teardown task that
 /// outlives the calling stack frame.
-#[derive(Debug, Default)]
 struct LiveRegistryShared {
     entries: RwLock<HashMap<ResourceUri, Arc<SubscriptionEntry>>>,
+    sink: RwLock<Option<Arc<dyn NotificationSink>>>,
+    notify_interval: RwLock<Duration>,
+}
+
+impl Default for LiveRegistryShared {
+    fn default() -> Self {
+        Self {
+            entries: RwLock::default(),
+            sink: RwLock::new(None),
+            notify_interval: RwLock::new(DEFAULT_NOTIFY_INTERVAL),
+        }
+    }
+}
+
+impl std::fmt::Debug for LiveRegistryShared {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LiveRegistryShared")
+            .field("entries", &"<HashMap>")
+            .field("sink", &"<Option<dyn NotificationSink>>")
+            .field("notify_interval", &"<RwLock<Duration>>")
+            .finish()
+    }
 }
 
 /// Refcounted registry of live resource subscriptions.
@@ -186,6 +231,26 @@ impl LiveRegistry {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Install (or replace) the notification sink. Subsequent
+    /// frames fire `sink.notify(uri)` post-throttle. Pass `None`
+    /// to detach the sink (a fresh registry has none).
+    pub async fn set_notification_sink(&self, sink: Option<Arc<dyn NotificationSink>>) {
+        *self.inner.sink.write().await = sink;
+    }
+
+    /// Override the per-URI notification interval. The default is
+    /// [`DEFAULT_NOTIFY_INTERVAL`] (100 ms ≈ 10 Hz). Smaller values
+    /// produce more notifications; `Duration::ZERO` disables the
+    /// throttle entirely.
+    pub async fn set_notify_interval(&self, interval: Duration) {
+        *self.inner.notify_interval.write().await = interval;
+    }
+
+    /// Snapshot the per-URI notification interval.
+    pub async fn notify_interval(&self) -> Duration {
+        *self.inner.notify_interval.read().await
     }
 
     /// Number of distinct URIs currently subscribed (live entries).
@@ -251,6 +316,7 @@ impl LiveRegistry {
             history: Mutex::new(VecDeque::with_capacity(HISTORY_CAPACITY)),
             broadcast: broadcast_tx.clone(),
             cancel: cancel.clone(),
+            last_notified: Mutex::new(None),
         });
 
         {
@@ -273,6 +339,8 @@ impl LiveRegistry {
         // / `broadcast` / `cancel` and exits cleanly on cancel or on
         // upstream stream end.
         let task_entry = entry.clone();
+        let task_uri = uri.clone();
+        let task_shared = self.inner.clone();
         tokio::spawn(async move {
             use futures_util::StreamExt;
             loop {
@@ -291,6 +359,13 @@ impl LiveRegistry {
                             *task_entry.latest.lock().await = Some(value);
                             // Errors from `send` mean no receivers — fine.
                             let _ = task_entry.broadcast.send(());
+
+                            // Throttle the notification sink at
+                            // `notify_interval`. Default 100 ms ≈
+                            // 10 Hz; intermediate frames are
+                            // coalesced — the next read returns
+                            // the latest snapshot.
+                            maybe_notify(&task_entry, &task_uri, &task_shared).await;
                         }
                         Some(Err(err)) => {
                             tracing::warn!(error = %err, "live subscription stream error; closing");
@@ -321,6 +396,27 @@ impl LiveRegistry {
             entry,
             registry: self.inner.clone(),
         }
+    }
+}
+
+/// Apply the notification throttle and, if eligible, fire the sink.
+async fn maybe_notify(entry: &SubscriptionEntry, uri: &ResourceUri, shared: &LiveRegistryShared) {
+    let interval = *shared.notify_interval.read().await;
+    let mut last = entry.last_notified.lock().await;
+    let now = Instant::now();
+    let should_emit = match *last {
+        // `Duration::ZERO` disables the throttle.
+        _ if interval.is_zero() => true,
+        Some(prev) => now.saturating_duration_since(prev) >= interval,
+        None => true,
+    };
+    if !should_emit {
+        return;
+    }
+    *last = Some(now);
+    drop(last);
+    if let Some(sink) = shared.sink.read().await.as_ref().cloned() {
+        sink.notify(uri);
     }
 }
 
@@ -764,6 +860,76 @@ mod tests {
 
         let signal = tokio::time::timeout(Duration::from_millis(500), updates.recv()).await;
         assert!(signal.is_ok(), "expected at least one update signal");
+    }
+
+    /// Sink that records every notify into a vec for the test
+    /// to inspect.
+    #[derive(Default, Clone)]
+    struct CountingSink {
+        calls: Arc<std::sync::Mutex<Vec<ResourceUri>>>,
+    }
+    impl NotificationSink for CountingSink {
+        fn notify(&self, uri: &ResourceUri) {
+            self.calls.lock().unwrap().push(uri.clone());
+        }
+    }
+
+    #[tokio::test]
+    async fn notification_sink_fires_after_first_frame() {
+        let provider = StubProvider::with(book_btc(), vec![serde_json::json!({"v": 1})]);
+        let registry = LiveRegistry::new();
+        let sink = CountingSink::default();
+        registry
+            .set_notification_sink(Some(Arc::new(sink.clone())))
+            .await;
+        // Disable the throttle so the test does not have to wait.
+        registry.set_notify_interval(Duration::ZERO).await;
+
+        let _handle = registry.subscribe(&provider, &book_btc()).await.unwrap();
+        for _ in 0..50 {
+            if !sink.calls.lock().unwrap().is_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        assert!(
+            !sink.calls.lock().unwrap().is_empty(),
+            "expected at least one notification"
+        );
+    }
+
+    #[tokio::test]
+    async fn notification_throttle_coalesces_burst_into_single_emit() {
+        // Provider emits a hundred frames in immediate succession.
+        let frames: Vec<Value> = (0..100).map(|i| serde_json::json!({"v": i})).collect();
+        let provider = StubProvider::with(book_btc(), frames);
+        let registry = LiveRegistry::new();
+        let sink = CountingSink::default();
+        registry
+            .set_notification_sink(Some(Arc::new(sink.clone())))
+            .await;
+        // 1 s interval — at default cadence the 100 frames would
+        // fire 100 notifications. The throttle must coalesce them
+        // into a single emit (the first frame wins; the rest are
+        // suppressed within the window).
+        registry.set_notify_interval(Duration::from_secs(1)).await;
+
+        let _handle = registry.subscribe(&provider, &book_btc()).await.unwrap();
+        // Give the reader task a beat to drain all 100 frames.
+        for _ in 0..50 {
+            if !sink.calls.lock().unwrap().is_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        // Wait an extra ~50 ms to be sure the throttle gate does
+        // NOT release a second emit within the 1 s window.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let n = sink.calls.lock().unwrap().len();
+        assert_eq!(
+            n, 1,
+            "throttle must coalesce 100-frame burst into a single notification (got {n})"
+        );
     }
 
     #[test]
