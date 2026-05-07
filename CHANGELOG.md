@@ -204,9 +204,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - HTTP path passes the same token to `http_transport::serve` so
     axum + rmcp both observe the cancellation.
   - `main` returns `ExitCode` directly: `0` on clean shutdown, `1`
-    on a startup-config / build / bind error (with a structured
-    stderr one-liner). `2` is reserved for "upstream auth failure
-    on first authenticated call" and lands with v0.2.
+    on a startup-config / build / bind error (with a single-line
+    stderr message — `error: cause: cause` chain joined with `:`,
+    no embedded newlines). `2` is reserved for "upstream auth
+    failure on first authenticated call" and lands with v0.2.
 - `tests/graceful_shutdown.rs`: spins the HTTP transport on a random
   local port, drives `cancel.cancel()` as the unit-test stand-in for
   SIGTERM, and asserts the server task exits within the 5 s grace

@@ -45,8 +45,15 @@ async fn main() -> ExitCode {
         Err(err) => {
             // The error path is intentionally allowed to use stderr;
             // tracing may not be initialised yet (Config::load can
-            // fail) so we print a structured one-liner directly.
-            eprintln!("deribit-mcp: startup error: {err:#}");
+            // fail) so we print directly. Use the non-alternate
+            // formatter so the line is single-line; chained causes
+            // appear after `: ` separators on the same line.
+            let mut message = err.to_string();
+            for cause in err.chain().skip(1) {
+                message.push_str(": ");
+                message.push_str(&cause.to_string());
+            }
+            eprintln!("deribit-mcp: startup error: {message}");
             ExitCode::from(EXIT_CONFIG_ERROR)
         }
     }
@@ -143,19 +150,38 @@ async fn first_termination_signal() -> &'static str {
             Ok(s) => s,
             Err(err) => {
                 tracing::warn!(error = %err, "failed to install SIGTERM handler; SIGINT only");
-                let _ = tokio::signal::ctrl_c().await;
+                wait_for_ctrl_c().await;
                 return "SIGINT";
             }
         };
         tokio::select! {
-            _ = tokio::signal::ctrl_c() => "SIGINT",
+            _ = wait_for_ctrl_c() => "SIGINT",
             _ = sigterm.recv() => "SIGTERM",
         }
     }
 
     #[cfg(not(unix))]
     {
-        let _ = tokio::signal::ctrl_c().await;
+        wait_for_ctrl_c().await;
         "SIGINT"
+    }
+}
+
+/// Wait for SIGINT (Ctrl-C). On a Result error from
+/// `tokio::signal::ctrl_c` (handler-install failure, very unusual),
+/// log and park indefinitely so we don't spuriously cancel the
+/// shutdown token; the SIGTERM branch (or external orchestrator
+/// SIGKILL) is the recovery path.
+async fn wait_for_ctrl_c() {
+    match tokio::signal::ctrl_c().await {
+        Ok(()) => {}
+        Err(err) => {
+            tracing::warn!(
+                error = %err,
+                "failed to install SIGINT handler; relying on SIGTERM / orchestrator"
+            );
+            // Park until cancelled by another path (e.g. SIGTERM).
+            std::future::pending::<()>().await;
+        }
     }
 }
