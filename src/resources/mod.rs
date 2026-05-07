@@ -88,7 +88,10 @@ pub fn parse_resource_uri(s: &str) -> Result<ResourceUri, AdapterError> {
     let head = segments
         .next()
         .ok_or_else(|| AdapterError::validation("uri", "missing resource head"))?;
-    let tail = segments.next();
+    // Treat a trailing-slash tail (`deribit://instruments/`) as
+    // "missing", not as an empty currency/instrument segment, so the
+    // error reported is the documented `field: "uri"` shape.
+    let tail = segments.next().filter(|s| !s.is_empty());
 
     match (head, tail) {
         ("currencies", None) => Ok(ResourceUri::Currencies),
@@ -156,7 +159,7 @@ fn parse_currency(s: &str) -> Result<String, AdapterError> {
 /// `BTC-31MAY24-50000-C`, …).
 ///
 /// Deribit instrument names are dash-separated ASCII upper-case tokens.
-/// Light-touch validation: 1..=64 chars of `[A-Z0-9-]`. The upstream
+/// Light-touch validation: 1..=64 chars of `[A-Z0-9_-]`. The upstream
 /// HTTP / WebSocket call enforces semantic shape.
 fn parse_instrument_name(s: &str) -> Result<String, AdapterError> {
     if s.is_empty() || s.len() > 64 {
@@ -242,17 +245,20 @@ impl ResourceRegistry {
         list.templates.push(make_template(
             "deribit://book/{instrument}",
             "Deribit order book (live, v0.3+)",
-            "Live order book for an instrument. Read returns NotImplemented before v0.3.",
+            "Live order book for an instrument. Read returns a structured Validation \
+             error (`field: \"uri\"`) until v0.3 wires the WebSocket transport.",
         ));
         list.templates.push(make_template(
             "deribit://ticker/{instrument}",
             "Deribit ticker (live, v0.3+)",
-            "Live ticker for an instrument. Read returns NotImplemented before v0.3.",
+            "Live ticker for an instrument. Read returns a structured Validation \
+             error (`field: \"uri\"`) until v0.3 wires the WebSocket transport.",
         ));
         list.templates.push(make_template(
             "deribit://trades/{instrument}",
             "Deribit last trades (live, v0.3+)",
-            "Live trades for an instrument. Read returns NotImplemented before v0.3.",
+            "Live trades for an instrument. Read returns a structured Validation \
+             error (`field: \"uri\"`) until v0.3 wires the WebSocket transport.",
         ));
         Self { list }
     }
