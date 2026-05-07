@@ -192,38 +192,45 @@ async fn handle_place_order(ctx: &AdapterContext, input: Value) -> Result<Value,
 /// Enforce the per-process notional cap configured via
 /// `--max-order-usd` / `DERIBIT_MAX_ORDER_USD`.
 ///
-/// Runs after schema validation, before any network call. When the
-/// cap is unset the function is a no-op. When set, it converts the
-/// order size to a USD-equivalent notional and rejects the call
-/// with [`AdapterError::SizeCapExceeded`] if the notional is over
-/// the cap.
+/// Runs after schema validation, before any private
+/// order-placement call (`/private/buy` / `/private/sell`). When
+/// the cap is unset the function is a no-op. When set, it
+/// converts the order size to a USD-equivalent notional and
+/// rejects the call with [`AdapterError::SizeCapExceeded`] if the
+/// notional is over the cap. May fetch upstream pricing data
+/// (`/public/ticker`, `/public/get_index_price`) when the caller
+/// did not supply a `price` or the instrument is an option.
 ///
 /// # Notional formula
 ///
 /// Classifies the instrument by its name suffix:
 ///
-/// - Linear (`*_USDC*` / `*_USDT*` — settlement in stablecoin):
+/// - **Linear** (`*_USDC*` / `*_USDT*` — settlement in stablecoin):
 ///   `notional = amount × price`. For market orders without a
 ///   provided `price`, the upstream `mark_price` from
 ///   `/public/ticker` is used.
-/// - Inverse (everything else — BTC-/ETH-denominated futures,
-///   perpetuals, options): `amount` is already USD-notional per
-///   Deribit's contract-size convention, so the notional is
+/// - **Option** (final segment is `-C` / `-P` with a numeric
+///   strike): `notional = amount × index_price`, where
+///   `index_price` is the upstream USD index for the option's
+///   underlying (`BTC`, `ETH`, …) via `/public/get_index_price`.
+///   This pins the conservative upper bound of underlying USD
+///   exposure for `amount` contracts of the option.
+/// - **Inverse** (everything else — BTC- / ETH-denominated
+///   futures and perpetuals): `amount` is already USD-notional
+///   per Deribit's contract-size convention, so the notional is
 ///   `amount` directly.
 ///
 /// The classification is conservative — when in doubt the inverse
 /// branch is taken so the cap doesn't silently let through a
-/// larger order. Options on inverse currencies share the inverse
-/// branch; this slightly overcounts cheap deep-OTM options but is
-/// safe in the cap direction.
+/// larger order.
 ///
 /// # Errors
 ///
 /// Returns [`AdapterError::SizeCapExceeded`] when the computed
 /// notional exceeds the cap. May also propagate
-/// [`AdapterError::Upstream`] if the mark-price fetch needed for
-/// linear market orders fails.
-pub async fn enforce_size_cap(
+/// [`AdapterError::Upstream`] if a price-fetch needed for the
+/// notional calculation fails.
+pub(crate) async fn enforce_size_cap(
     ctx: &AdapterContext,
     instrument_name: &str,
     amount: f64,
@@ -254,12 +261,46 @@ fn is_linear_instrument(name: &str) -> bool {
     name.contains("_USDC") || name.contains("_USDT")
 }
 
+/// `true` when the instrument is an option — last segment is a
+/// single `C` or `P` and the segment before it parses as a
+/// strike. Matches Deribit's `<BASE>-<EXPIRY>-<STRIKE>-<C|P>`
+/// pattern.
+fn is_option_instrument(name: &str) -> bool {
+    let mut parts = name.rsplit('-');
+    let Some(last) = parts.next() else {
+        return false;
+    };
+    if last != "C" && last != "P" {
+        return false;
+    }
+    let Some(strike) = parts.next() else {
+        return false;
+    };
+    strike.parse::<f64>().is_ok()
+}
+
+/// Underlying base symbol for an option instrument
+/// (`BTC-29SEP24-50000-C` → `Some("BTC")`).
+fn option_underlying_base(name: &str) -> Option<&str> {
+    name.split('-').next()
+}
+
 async fn compute_usd_notional(
     ctx: &AdapterContext,
     instrument_name: &str,
     amount: f64,
     price: Option<f64>,
 ) -> Result<f64, AdapterError> {
+    if is_option_instrument(instrument_name) {
+        // Conservative upper bound of underlying USD exposure for
+        // `amount` contracts of the option. Each contract is for
+        // one unit of the underlying at Deribit, so the underlying
+        // notional is `amount × index_price`.
+        let base = option_underlying_base(instrument_name).unwrap_or("BTC");
+        let index_name = format!("{}_usd", base.to_lowercase());
+        let idx = ctx.http.get_index_price(&index_name).await?;
+        return Ok(amount * idx.index_price);
+    }
     if !is_linear_instrument(instrument_name) {
         // Inverse — amount is USD notional directly.
         return Ok(amount);
@@ -268,7 +309,6 @@ async fn compute_usd_notional(
         Some(p) => p,
         None => {
             let ticker = ctx.http.get_ticker(instrument_name).await?;
-            // The `TickerData` model surfaces the field as `mark_price`.
             ticker.mark_price
         }
     };
@@ -867,6 +907,19 @@ mod tests {
         assert!(!is_linear_instrument("BTC-PERPETUAL"));
         assert!(!is_linear_instrument("ETH-29SEP24"));
         assert!(!is_linear_instrument("BTC-29SEP24-50000-C"));
+    }
+
+    #[test]
+    fn option_instrument_classification() {
+        assert!(is_option_instrument("BTC-29SEP24-50000-C"));
+        assert!(is_option_instrument("ETH-30JUN23-1500-P"));
+        assert!(!is_option_instrument("BTC-PERPETUAL"));
+        assert!(!is_option_instrument("BTC-29SEP24"));
+        // Last segment looks like an option flag but the strike
+        // doesn't parse — fall back to non-option.
+        assert!(!is_option_instrument("BTC-FOO-BAR-C"));
+        assert_eq!(option_underlying_base("BTC-29SEP24-50000-C"), Some("BTC"));
+        assert_eq!(option_underlying_base("ETH-30JUN23-1500-P"), Some("ETH"));
     }
 
     fn ctx_with_cap(cap: Option<u64>) -> AdapterContext {

@@ -977,3 +977,77 @@ async fn place_order_over_size_cap_rejected_before_network() {
         other => panic!("unexpected: {other:?}"),
     }
 }
+
+#[tokio::test]
+async fn place_order_linear_market_fetches_mark_price_for_cap() {
+    // Linear BTC_USDC-PERPETUAL, no caller-supplied price (market).
+    // The cap (10_000) check must fetch /public/ticker and use the
+    // returned mark_price (50_000) × amount (1.0) = 50_000 > cap.
+    let mut server = mockito::Server::new_async().await;
+    let auth_body = serde_json::json!({
+        "jsonrpc":"2.0","id":0,
+        "result": {
+            "access_token":"a","expires_in":900,
+            "refresh_token":"r","scope":"s","token_type":"Bearer"
+        }
+    });
+    server
+        .mock("GET", "/api/v2/public/auth")
+        .match_query(mockito::Matcher::Any)
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(auth_body.to_string())
+        .expect_at_least(0)
+        .create_async()
+        .await;
+    let ticker_body = serde_json::json!({
+        "jsonrpc":"2.0","id":0,
+        "result": {
+            "instrument_name": "BTC_USDC-PERPETUAL",
+            "best_bid_price": 50_000.0,
+            "best_ask_price": 50_001.0,
+            "best_bid_amount": 1.0,
+            "best_ask_amount": 1.5,
+            "mark_price": 50_000.0,
+            "last_price": 49_999.0,
+            "timestamp": 1_700_000_000_000_u64,
+            "state": "open",
+            "stats": {"high":51_000.0,"low":49_000.0,"volume":100.0,"volume_usd":5_000_000.0,"price_change":200.0}
+        }
+    });
+    let ticker_mock = server
+        .mock(
+            "GET",
+            "/api/v2/public/ticker?instrument_name=BTC_USDC-PERPETUAL",
+        )
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(ticker_body.to_string())
+        .expect(1)
+        .create_async()
+        .await;
+
+    let ctx = ctx_with_mock_cap(&server.url(), 10_000);
+    let registry = ToolRegistry::build(&ctx);
+    let err = registry
+        .call(
+            &ctx,
+            "place_order",
+            json!({
+                "instrument_name": "BTC_USDC-PERPETUAL",
+                "side": "buy",
+                "amount": 1.0,
+                "type": "market"
+            }),
+        )
+        .await
+        .unwrap_err();
+    match err {
+        AdapterError::SizeCapExceeded { requested, cap } => {
+            assert!((requested - 50_000.0).abs() < 1e-6);
+            assert!((cap - 10_000.0).abs() < 1e-6);
+        }
+        other => panic!("unexpected: {other:?}"),
+    }
+    ticker_mock.assert_async().await;
+}

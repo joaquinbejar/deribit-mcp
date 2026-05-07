@@ -11,26 +11,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `--max-order-usd` notional cap enforcement (v0.4-04):
   - `enforce_size_cap` runs in `place_order` after schema
-    validation, before any network call. When the cap is unset
-    the function is a no-op.
+    validation, before any private order-placement call. When
+    the cap is unset the function is a no-op.
   - Notional formula:
     - Linear (`*_USDC*` / `*_USDT*`): `amount × price`. Market
       orders without a caller `price` fetch upstream
       `mark_price` via `/public/ticker`.
-    - Inverse (everything else, incl. options on
-      BTC- / ETH-denominated currencies): `amount` is already
-      USD per Deribit's contract-size convention, so the
-      notional is `amount` directly. Conservative — slightly
-      overcounts cheap deep-OTM options but only ever in the
-      cap-direction.
+    - Option (final segment is `-C` / `-P` with a numeric
+      strike): `amount × index_price`, where `index_price`
+      comes from `/public/get_index_price?index_name=<base>_usd`.
+      Pins the conservative upper bound of underlying USD
+      exposure.
+    - Inverse (everything else — BTC- / ETH-denominated futures
+      and perpetuals): `amount` is already USD-notional per
+      Deribit's contract-size convention, so the notional is
+      `amount` directly.
   - Failures surface as
     `AdapterError::SizeCapExceeded { requested, cap }`.
   - New unit + integration tests:
-    `linear_instrument_classification`, `cap_unset_is_noop`,
+    `linear_instrument_classification`,
+    `option_instrument_classification`, `cap_unset_is_noop`,
     `inverse_notional_uses_amount`, `inverse_under_cap_passes`,
     `linear_notional_uses_price_times_amount`,
-    `place_order_over_size_cap_rejected_before_network`.
-  - Notional formula documented in `doc/DOMAIN-MODEL.md` §6.3.
+    `place_order_over_size_cap_rejected_before_network`,
+    `place_order_linear_market_fetches_mark_price_for_cap`.
 
 - `cancel_all_by_currency` and `cancel_all_by_instrument`
   Trading-class tools (v0.4-03):
