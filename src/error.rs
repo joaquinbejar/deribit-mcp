@@ -195,7 +195,9 @@ impl AdapterError {
 impl From<HttpError> for AdapterError {
     fn from(err: HttpError) -> Self {
         match err {
-            HttpError::AuthenticationFailed(message) => classify_auth_failure(&message),
+            HttpError::AuthenticationFailed(message) => AdapterError::Auth {
+                reason: classify_auth_failure_reason(&message),
+            },
             HttpError::RateLimitExceeded => AdapterError::RateLimited {
                 retry_after_ms: DEFAULT_RATE_LIMIT_RETRY_MS,
             },
@@ -221,41 +223,59 @@ impl From<HttpError> for AdapterError {
 /// Mapping (per `doc/DERIBIT-INTEGRATION.md` §3.3):
 ///
 /// - `10005` / `account is suspended` → [`AuthFailureReason::Suspended`].
-/// - `13009` / `unauthorized scope` / `scope insufficient` →
-///   [`AuthFailureReason::ScopeInsufficient`].
+/// - `13009` / `unauthorized scope` / `scope insufficient` /
+///   `insufficient scope` / `scope required` →
+///   [`AuthFailureReason::ScopeInsufficient`]. Matches require either
+///   the documented numeric code or one of those exact phrases — a
+///   bare mention of the word "scope" is **not** enough, to avoid
+///   misclassifying generic OAuth wording as a scope error.
 /// - `13004` / `invalid_token` / `token expired` →
 ///   [`AuthFailureReason::TokenExpiredAndRefreshFailed`].
 /// - everything else (including `10004`, `401`, anything explicitly
 ///   marked unauthorized) → [`AuthFailureReason::Unauthorized`].
 #[cold]
 #[inline(never)]
-fn classify_auth_failure(message: &str) -> AdapterError {
+fn classify_auth_failure_reason(message: &str) -> AuthFailureReason {
     let lower = message.to_ascii_lowercase();
 
     if lower.contains("10005") || lower.contains("suspend") {
-        return AdapterError::Auth {
-            reason: AuthFailureReason::Suspended,
-        };
+        return AuthFailureReason::Suspended;
     }
-    if lower.contains("13009") || lower.contains("scope") {
-        let needed = extract_scope(&lower).unwrap_or_else(|| "unknown".to_string());
-        return AdapterError::Auth {
-            reason: AuthFailureReason::ScopeInsufficient { needed },
-        };
+    if is_scope_insufficient(&lower) {
+        // Only mint a `ScopeInsufficient` when we can name the scope;
+        // the LLM client expects an actionable `needed:` payload.
+        // Fall back to `Unauthorized` when the upstream phrase
+        // matches but the scope name is not embedded — better to
+        // surface the broader category than fabricate a value.
+        if let Some(needed) = extract_scope(&lower) {
+            return AuthFailureReason::ScopeInsufficient { needed };
+        }
     }
     if lower.contains("13004")
         || lower.contains("invalid_token")
         || lower.contains("token expired")
         || lower.contains("token has expired")
     {
-        return AdapterError::Auth {
-            reason: AuthFailureReason::TokenExpiredAndRefreshFailed,
-        };
+        return AuthFailureReason::TokenExpiredAndRefreshFailed;
     }
 
-    AdapterError::Auth {
-        reason: AuthFailureReason::Unauthorized,
+    AuthFailureReason::Unauthorized
+}
+
+/// Whether `lower` (already lowercased) carries one of the
+/// documented scope-insufficient signals.
+fn is_scope_insufficient(lower: &str) -> bool {
+    if lower.contains("13009") {
+        return true;
     }
+    const PHRASES: &[&str] = &[
+        "scope insufficient",
+        "insufficient scope",
+        "unauthorized scope",
+        "scope required",
+        "missing scope",
+    ];
+    PHRASES.iter().any(|p| lower.contains(p))
 }
 
 /// Pull the scope name out of an upstream "scope insufficient"
@@ -404,6 +424,39 @@ mod tests {
                 reason: AuthFailureReason::ScopeInsufficient {
                     needed: "trade:read_write".to_string(),
                 }
+            }
+        );
+    }
+
+    #[test]
+    fn auth_failure_with_word_scope_in_unrelated_phrase_is_unauthorized() {
+        // The upstream sometimes embeds "scope" in OAuth wording
+        // unrelated to scope-insufficient (e.g. "out of scope of
+        // current session"). Make sure that does NOT misclassify
+        // as `ScopeInsufficient`.
+        let err: AdapterError =
+            HttpError::AuthenticationFailed("error 10004: out of scope of current session".into())
+                .into();
+        assert_eq!(
+            err,
+            AdapterError::Auth {
+                reason: AuthFailureReason::Unauthorized
+            }
+        );
+    }
+
+    #[test]
+    fn auth_failure_with_13009_but_no_scope_name_falls_back_to_unauthorized() {
+        // The 13009 marker is documented as scope-insufficient, but
+        // when the message does not embed an actionable scope name
+        // we surface the broader `Unauthorized` rather than mint a
+        // fabricated `needed:` payload.
+        let err: AdapterError =
+            HttpError::AuthenticationFailed("api error 13009: unspecified".into()).into();
+        assert_eq!(
+            err,
+            AdapterError::Auth {
+                reason: AuthFailureReason::Unauthorized
             }
         );
     }
