@@ -1180,12 +1180,19 @@ async fn cancel_all_by_currency_zero_count_returns_zero() {
 }
 
 #[tokio::test]
-async fn prompts_list_returns_empty_for_baseline_registry() {
+async fn prompts_list_for_built_registry_includes_daily_options_summary() {
+    // `PromptRegistry::build` populates whichever prompts are
+    // shipped — at v0.5-02 that's `daily_options_summary`. The
+    // empty-registry path is exercised by the lib-level
+    // `unknown_prompt_returns_validation` unit test against
+    // `PromptRegistry::new`.
     use deribit_mcp::PromptRegistry;
     let ctx = ctx_with_mock("http://127.0.0.1:0/");
     let registry = PromptRegistry::build(&ctx);
-    assert!(registry.is_empty());
-    assert_eq!(registry.list().len(), 0);
+    assert!(registry.contains("daily_options_summary"));
+    let names: std::collections::HashSet<String> =
+        registry.list().into_iter().map(|p| p.name).collect();
+    assert!(names.contains("daily_options_summary"));
 }
 
 #[tokio::test]
@@ -1199,6 +1206,59 @@ async fn prompts_get_unknown_returns_validation() {
         .unwrap_err();
     match err {
         AdapterError::Validation { field, .. } => assert_eq!(field, "name"),
+        other => panic!("unexpected: {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn prompts_get_daily_options_summary_returns_well_formed_messages() {
+    use deribit_mcp::PromptRegistry;
+    use serde_json::Map;
+    let ctx = ctx_with_mock("http://127.0.0.1:0/");
+    let registry = PromptRegistry::build(&ctx);
+    assert!(registry.contains("daily_options_summary"));
+
+    let mut args = Map::new();
+    args.insert("currency".into(), serde_json::Value::String("BTC".into()));
+    args.insert("horizon_days".into(), serde_json::Value::from(7_u8));
+    let result = registry
+        .get(&ctx, "daily_options_summary", args)
+        .await
+        .expect("ok");
+    assert_eq!(result.messages.len(), 2);
+    let serialised = serde_json::to_value(&result).expect("ser");
+    let messages = serialised["messages"].as_array().expect("messages");
+    assert_eq!(messages.len(), 2);
+    assert_eq!(messages[0]["role"].as_str(), Some("user"));
+    assert_eq!(messages[1]["role"].as_str(), Some("assistant"));
+    let user_text = messages[0]["content"]["text"].as_str().expect("text");
+    for tool in [
+        "list_instruments",
+        "get_book_summary_by_currency",
+        "get_historical_volatility",
+    ] {
+        assert!(
+            user_text.contains(tool),
+            "expected reference to `{tool}` in prompt body"
+        );
+    }
+}
+
+#[tokio::test]
+async fn prompts_get_daily_options_summary_rejects_invalid_currency() {
+    use deribit_mcp::PromptRegistry;
+    use serde_json::Map;
+    let ctx = ctx_with_mock("http://127.0.0.1:0/");
+    let registry = PromptRegistry::build(&ctx);
+    let mut args = Map::new();
+    args.insert("currency".into(), serde_json::Value::String("XRP".into()));
+    args.insert("horizon_days".into(), serde_json::Value::from(7_u8));
+    let err = registry
+        .get(&ctx, "daily_options_summary", args)
+        .await
+        .unwrap_err();
+    match err {
+        AdapterError::Validation { field, .. } => assert_eq!(field, "currency"),
         other => panic!("unexpected: {other:?}"),
     }
 }

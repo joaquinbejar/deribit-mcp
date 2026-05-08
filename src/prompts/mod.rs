@@ -1,8 +1,11 @@
 //! Prompt registry, descriptor list, and dispatch.
 //!
 //! v0.5-01 ships the registry plumbing and handshake glue. The
-//! concrete prompts (`daily_options_summary`, `funding_snapshot`,
-//! `position_review`) land in v0.5-02 / v0.5-03 / v0.5-04.
+//! concrete prompts land in:
+//!
+//! - [`daily_options_summary`] — v0.5-02.
+//! - `funding_snapshot` — v0.5-03.
+//! - `position_review` — v0.5-04.
 //!
 //! Prompts are registered into a [`PromptRegistry`] built once at
 //! startup and frozen for the lifetime of the process. A prompt
@@ -20,6 +23,8 @@ use rmcp::model::{GetPromptResult, JsonObject, Prompt};
 
 use crate::context::AdapterContext;
 use crate::error::AdapterError;
+
+pub mod daily_options_summary;
 
 /// Boxed dynamic future returned by every prompt handler.
 pub type PromptFuture<'a> =
@@ -76,12 +81,18 @@ impl PromptRegistry {
         Self::default()
     }
 
-    /// Build the registry for a given context. v0.5-01 ships an
-    /// empty body; v0.5-02 / v0.5-03 / v0.5-04 populate the three
-    /// concrete prompts.
+    /// Build the registry for a given context.
+    ///
+    /// Populates:
+    ///
+    /// - `daily_options_summary` (v0.5-02).
+    /// - `funding_snapshot` (v0.5-03 — pending).
+    /// - `position_review` (v0.5-04 — pending).
     #[must_use]
     pub fn build(_ctx: &AdapterContext) -> Self {
-        Self::new()
+        let mut registry = Self::new();
+        daily_options_summary::register(&mut registry);
+        registry
     }
 
     /// Insert a prompt. Returns the previous entry under the same
@@ -178,10 +189,9 @@ mod tests {
     }
 
     #[test]
-    fn empty_registry_lists_nothing() {
+    fn build_populates_v05_prompts() {
         let registry = PromptRegistry::build(&ctx());
-        assert!(registry.is_empty());
-        assert_eq!(registry.list().len(), 0);
+        assert!(registry.contains("daily_options_summary"));
     }
 
     #[tokio::test]
@@ -189,7 +199,7 @@ mod tests {
         // Bind the context once so the borrow lives across the
         // `.await` even with no implicit-temporary-extension drama.
         let ctx = ctx();
-        let registry = PromptRegistry::build(&ctx);
+        let registry = PromptRegistry::new();
         let err = registry
             .get(&ctx, "no_such_prompt", JsonObject::new())
             .await
