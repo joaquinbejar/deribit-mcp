@@ -20,3 +20,12 @@ expression: prompts
       required: true
   description: "Compose a current + historical funding-rate snapshot for the configured currency. Names `list_instruments` + `get_funding_rate_history` and pins the tabular output shape."
   name: funding_snapshot
+- arguments:
+    - description: "Currency to scope the review to (`BTC`, `ETH`, `USDC`, …)."
+      name: currency
+      required: true
+    - description: "When `true`, append a recent-trades section. Defaults to `false`."
+      name: include_history
+      required: false
+  description: "Drive the LLM through an account / position review using the v0.2 `Account` tools (get_account_summary, get_positions, get_open_orders_by_currency, get_user_trades_by_currency). When credentials are not configured, returns a structured warning instead."
+  name: position_review
