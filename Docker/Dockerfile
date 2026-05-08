@@ -15,19 +15,26 @@
 # ---------- builder ----------
 # Pin to MSRV from `rust-toolchain.toml`. Bumping the toolchain is a
 # deliberate change and lands together with the lockfile / CI bump.
-FROM rust:1.85-slim-bookworm AS builder
+FROM rust:1.95-slim-bookworm AS builder
 WORKDIR /src
 
-# `aws-lc-sys` (pulled by `rustls`/`tokio-tungstenite` via
-# `deribit-websocket`'s `rustls-aws-lc` feature) needs `cmake` +
-# `perl` + a C toolchain to build. `ca-certificates` is required for
-# crates-io fetches inside the build. We deliberately do NOT install
-# `libssl-dev` — the dep graph uses Rustls and `openssl-sys` is not
-# present in `Cargo.lock`.
+# Build deps:
+#
+# - `cmake` + `perl` + the C toolchain for `aws-lc-sys` (pulled by
+#   `rustls` / `tokio-tungstenite` via `deribit-websocket`'s
+#   `rustls-aws-lc` feature).
+# - `libssl-dev` for `openssl-sys`, pulled transitively by
+#   `deribit-fix` 0.3 → `reqwest` 0.13 with default `native-tls`
+#   features. v0.5 builds did not need it; v0.6 added it via the
+#   FIX dep graph. The runtime stage (`gcr.io/distroless/cc`)
+#   already ships `libssl3` so dynamic linking still resolves at
+#   runtime.
+# - `ca-certificates` for crates-io fetches inside the build.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
         cmake \
+        libssl-dev \
         perl \
         pkg-config \
     && rm -rf /var/lib/apt/lists/*

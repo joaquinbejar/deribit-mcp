@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `Docker/Dockerfile` now installs `libssl-dev` in the builder
+  stage. Without it the build failed at `openssl-sys 0.9.115`
+  with `Could not find directory of OpenSSL installation`.
+  v0.6's `deribit-fix 0.3` dep transitively pulls `reqwest 0.13`
+  with default `native-tls` features, which compiles against
+  system OpenSSL even though the rest of the stack is on
+  Rustls. The runtime stage (`gcr.io/distroless/cc`) already
+  ships `libssl3` so dynamic linking still resolves.
+
 ### Added
 
 - `DERIBIT_NETWORK=testnet|mainnet` env var as a readable
