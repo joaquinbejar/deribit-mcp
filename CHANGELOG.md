@@ -25,8 +25,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     not to attempt any tool call. With credentials present, the
     body names the four Account tools and pins the output
     structure.
-  - Trading schema snapshot updated; integration tests cover
-    both branches:
+  - Prompt-descriptor schema snapshot
+    (`tests/snapshots/schema__prompt_descriptors.snap`) updated;
+    integration tests cover both branches:
     `prompts_get_position_review_with_credentials_lists_account_tools`,
     `prompts_get_position_review_without_credentials_emits_warning`.
 
@@ -40,8 +41,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     outliers, caveats).
   - Arguments: `currency` (`BTC` / `ETH`, case-normalised),
     `lookback_hours: u32` in `1..=720` (30 days).
-  - Trading schema snapshot extended with the new descriptor;
-    integration test
+  - Prompt-descriptor schema snapshot
+    (`tests/snapshots/schema__prompt_descriptors.snap`) extended
+    with the new descriptor; integration test
     `prompts_get_funding_snapshot_returns_well_formed_messages`
     asserts the body references `BTC-PERPETUAL` and
     `get_funding_rate_history`.

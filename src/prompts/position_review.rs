@@ -54,8 +54,9 @@ fn descriptor() -> Prompt {
         NAME,
         Some(
             "Drive the LLM through an account / position review using the v0.2 \
-             `Account` tools (get_account_summary, get_positions, \
-             get_open_orders_by_currency, get_user_trades_by_currency). When \
+             `Account` tools: `get_account_summary`, `get_positions`, \
+             `get_open_orders_by_currency`, and optionally \
+             `get_user_trades_by_currency` when `include_history = true`. When \
              credentials are not configured, returns a structured warning instead.",
         ),
         Some(arguments),
@@ -186,12 +187,24 @@ fn parse_args(args: JsonObject) -> Result<PositionReviewInput, AdapterError> {
     })
 }
 
+/// Trim, upper-case, and validate `currency` against a safe
+/// charset (ASCII alphanumeric, length 1..=8) before it gets
+/// interpolated into prompt body text. Anything that could
+/// terminate a quoted JSON-style tool-call snippet (quotes,
+/// braces, newlines, backslashes) is rejected so the rendered
+/// prompt cannot be smuggled past its surrounding instructions.
 fn normalize_currency(s: &str) -> Result<String, AdapterError> {
     let upper = s.trim().to_ascii_uppercase();
-    if upper.is_empty() {
+    if upper.is_empty() || upper.len() > 8 {
         return Err(AdapterError::Validation {
             field: "currency".to_string(),
-            message: "must be non-empty".to_string(),
+            message: "must be 1..=8 characters after trimming".to_string(),
+        });
+    }
+    if !upper.chars().all(|c| c.is_ascii_alphanumeric()) {
+        return Err(AdapterError::Validation {
+            field: "currency".to_string(),
+            message: "must be ASCII alphanumeric (e.g. `BTC`, `ETH`, `USDC`)".to_string(),
         });
     }
     Ok(upper)
@@ -258,6 +271,27 @@ mod tests {
     #[tokio::test]
     async fn render_rejects_empty_currency() {
         let err = render(true, args(json!({"currency":"   "})))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, AdapterError::Validation { ref field, .. } if field == "currency"));
+    }
+
+    #[tokio::test]
+    async fn render_rejects_currency_with_special_characters() {
+        for bad in ["BTC\"; rm -rf", "BTC\nINJECT", "BTC}", "BTC ETH"] {
+            let err = render(true, args(json!({"currency":bad})))
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(err, AdapterError::Validation { ref field, .. } if field == "currency"),
+                "expected currency rejection for {bad:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn render_rejects_currency_too_long() {
+        let err = render(true, args(json!({"currency":"BTCETHTOOLONG"})))
             .await
             .unwrap_err();
         assert!(matches!(err, AdapterError::Validation { ref field, .. } if field == "currency"));

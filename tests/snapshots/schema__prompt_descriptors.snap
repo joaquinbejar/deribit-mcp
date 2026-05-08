@@ -27,5 +27,5 @@ expression: prompts
     - description: "When `true`, append a recent-trades section. Defaults to `false`."
       name: include_history
       required: false
-  description: "Drive the LLM through an account / position review using the v0.2 `Account` tools (get_account_summary, get_positions, get_open_orders_by_currency, get_user_trades_by_currency). When credentials are not configured, returns a structured warning instead."
+  description: "Drive the LLM through an account / position review using the v0.2 `Account` tools: `get_account_summary`, `get_positions`, `get_open_orders_by_currency`, and optionally `get_user_trades_by_currency` when `include_history = true`. When credentials are not configured, returns a structured warning instead."
   name: position_review
