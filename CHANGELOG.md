@@ -9,6 +9,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `position_review` MCP prompt (v0.5-04):
+  - Drives the LLM through an end-of-day account / position
+    review using the v0.2 Account tools (`get_account_summary`,
+    `get_positions`, `get_open_orders_by_currency`, optionally
+    `get_user_trades_by_currency`). Pins the output sections
+    (headline, positions, open orders, flags, optional recent
+    trades, caveats).
+  - Arguments: `currency: String` (required, case-normalised),
+    `include_history: bool` (defaults `false`).
+  - Credentials-aware: when the adapter has no credentials
+    (`AdapterContext::has_credentials() == false`), the prompt
+    returns a structured `WARNING:`-prefixed body that explains
+    the Account tools are not registered and instructs the LLM
+    not to attempt any tool call. With credentials present, the
+    body names the four Account tools and pins the output
+    structure.
+  - Prompt-descriptor schema snapshot
+    (`tests/snapshots/schema__prompt_descriptors.snap`) updated;
+    integration tests cover both branches:
+    `prompts_get_position_review_with_credentials_lists_account_tools`,
+    `prompts_get_position_review_without_credentials_emits_warning`.
+
 - `funding_snapshot` MCP prompt (v0.5-03):
   - Curated User + Assistant message pair that walks the LLM
     through assembling a current + historical perpetual
@@ -19,8 +41,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     outliers, caveats).
   - Arguments: `currency` (`BTC` / `ETH`, case-normalised),
     `lookback_hours: u32` in `1..=720` (30 days).
-  - Trading schema snapshot extended with the new descriptor;
-    integration test
+  - Prompt-descriptor schema snapshot
+    (`tests/snapshots/schema__prompt_descriptors.snap`) extended
+    with the new descriptor; integration test
     `prompts_get_funding_snapshot_returns_well_formed_messages`
     asserts the body references `BTC-PERPETUAL` and
     `get_funding_rate_history`.

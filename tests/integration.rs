@@ -1284,3 +1284,49 @@ async fn prompts_get_funding_snapshot_returns_well_formed_messages() {
     assert!(user_text.contains("BTC-PERPETUAL"));
     assert!(user_text.contains("get_funding_rate_history"));
 }
+
+#[tokio::test]
+async fn prompts_get_position_review_with_credentials_lists_account_tools() {
+    use deribit_mcp::PromptRegistry;
+    use serde_json::Map;
+    let ctx = ctx_with_mock_creds("http://127.0.0.1:0/", true, false);
+    let registry = PromptRegistry::build(&ctx);
+    assert!(registry.contains("position_review"));
+    let mut args = Map::new();
+    args.insert("currency".into(), serde_json::Value::String("BTC".into()));
+    let result = registry
+        .get(&ctx, "position_review", args)
+        .await
+        .expect("ok");
+    let serialised = serde_json::to_value(&result).expect("ser");
+    let user_text = serialised["messages"][0]["content"]["text"]
+        .as_str()
+        .expect("text");
+    for tool in [
+        "get_account_summary",
+        "get_positions",
+        "get_open_orders_by_currency",
+    ] {
+        assert!(user_text.contains(tool));
+    }
+}
+
+#[tokio::test]
+async fn prompts_get_position_review_without_credentials_emits_warning() {
+    use deribit_mcp::PromptRegistry;
+    use serde_json::Map;
+    let ctx = ctx_with_mock("http://127.0.0.1:0/");
+    let registry = PromptRegistry::build(&ctx);
+    let mut args = Map::new();
+    args.insert("currency".into(), serde_json::Value::String("BTC".into()));
+    let result = registry
+        .get(&ctx, "position_review", args)
+        .await
+        .expect("ok");
+    let serialised = serde_json::to_value(&result).expect("ser");
+    let user_text = serialised["messages"][0]["content"]["text"]
+        .as_str()
+        .expect("text");
+    assert!(user_text.starts_with("WARNING:"));
+    assert!(user_text.contains("DERIBIT_CLIENT_ID"));
+}

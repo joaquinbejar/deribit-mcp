@@ -26,6 +26,7 @@ use crate::error::AdapterError;
 
 pub mod daily_options_summary;
 pub mod funding_snapshot;
+pub mod position_review;
 
 /// Boxed dynamic future returned by every prompt handler.
 pub type PromptFuture<'a> =
@@ -88,12 +89,13 @@ impl PromptRegistry {
     ///
     /// - `daily_options_summary` (v0.5-02).
     /// - `funding_snapshot` (v0.5-03).
-    /// - `position_review` (v0.5-04 — pending).
+    /// - `position_review` (v0.5-04).
     #[must_use]
     pub fn build(_ctx: &AdapterContext) -> Self {
         let mut registry = Self::new();
         daily_options_summary::register(&mut registry);
         funding_snapshot::register(&mut registry);
+        position_review::register(&mut registry);
         registry
     }
 
@@ -195,6 +197,7 @@ mod tests {
         let registry = PromptRegistry::build(&ctx());
         assert!(registry.contains("daily_options_summary"));
         assert!(registry.contains("funding_snapshot"));
+        assert!(registry.contains("position_review"));
     }
 
     #[tokio::test]
