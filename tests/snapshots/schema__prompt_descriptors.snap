@@ -11,3 +11,12 @@ expression: prompts
       required: true
   description: "Summarise BTC / ETH options expiring within the requested horizon using the public Read tools (`list_instruments`, `get_book_summary_by_currency`, `get_historical_volatility`)."
   name: daily_options_summary
+- arguments:
+    - description: "`BTC` or `ETH`. Currency whose perpetual funding will be snapshotted."
+      name: currency
+      required: true
+    - description: How many hours of funding history to include. Integer in the range 1..=720 (30 days); values outside the range are rejected.
+      name: lookback_hours
+      required: true
+  description: "Compose a current + historical funding-rate snapshot for the configured currency. Names `list_instruments` + `get_funding_rate_history` and pins the tabular output shape."
+  name: funding_snapshot
