@@ -30,7 +30,7 @@ use std::env;
 use std::sync::Arc;
 use std::time::Duration;
 
-use deribit_mcp::config::{Config, LogFormat, Transport};
+use deribit_mcp::config::{Config, LogFormat, OrderTransport, Transport};
 use deribit_mcp::context::AdapterContext;
 use deribit_mcp::error::AdapterError;
 use deribit_mcp::tools::ToolRegistry;
@@ -123,6 +123,7 @@ async fn live_testnet_account_smoke() {
         http_listen: "127.0.0.1:8723".parse().expect("default listen"),
         http_bearer_token: None,
         log_format: LogFormat::Text,
+        order_transport: OrderTransport::Http,
     };
     let ctx = Arc::new(AdapterContext::new(Arc::new(cfg)).expect("adapter context"));
     let registry = ToolRegistry::build(&ctx);
@@ -214,6 +215,7 @@ async fn live_testnet_trading_smoke() {
         http_listen: "127.0.0.1:8723".parse().expect("default listen"),
         http_bearer_token: None,
         log_format: LogFormat::Text,
+        order_transport: OrderTransport::Http,
     };
     let ctx = Arc::new(AdapterContext::new(Arc::new(cfg)).expect("adapter context"));
     let registry = ToolRegistry::build(&ctx);

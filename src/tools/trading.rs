@@ -923,7 +923,7 @@ mod tests {
     }
 
     fn ctx_with_cap(cap: Option<u64>) -> AdapterContext {
-        use crate::config::{Config, LogFormat, Transport};
+        use crate::config::{Config, LogFormat, OrderTransport, Transport};
         use std::net::SocketAddr;
         let cfg = Config {
             endpoint: "https://test.deribit.com".to_string(),
@@ -935,6 +935,7 @@ mod tests {
             http_listen: SocketAddr::from(([127, 0, 0, 1], 8723)),
             http_bearer_token: None,
             log_format: LogFormat::Text,
+            order_transport: OrderTransport::Http,
         };
         AdapterContext::new(Arc::new(cfg)).expect("ctx")
     }

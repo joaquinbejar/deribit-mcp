@@ -9,7 +9,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use deribit_mcp::config::{Config, LogFormat, Transport};
+use deribit_mcp::config::{Config, LogFormat, OrderTransport, Transport};
 use deribit_mcp::context::AdapterContext;
 use deribit_mcp::server::DeribitMcpServer;
 use rmcp::ServiceExt;
@@ -28,6 +28,7 @@ fn test_config() -> Config {
         http_listen: "127.0.0.1:8723".parse().unwrap(),
         http_bearer_token: None,
         log_format: LogFormat::Text,
+        order_transport: OrderTransport::Http,
     }
 }
 

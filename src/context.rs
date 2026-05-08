@@ -179,7 +179,7 @@ fn is_mainnet(url: &Url) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{LogFormat, Transport};
+    use crate::config::{LogFormat, OrderTransport, Transport};
     use std::net::SocketAddr;
 
     fn cfg(endpoint: &str, with_creds: bool) -> Config {
@@ -193,6 +193,7 @@ mod tests {
             http_listen: SocketAddr::from(([127, 0, 0, 1], 8723)),
             http_bearer_token: None,
             log_format: LogFormat::Text,
+            order_transport: OrderTransport::Http,
         }
     }
 
