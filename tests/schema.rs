@@ -108,6 +108,20 @@ fn trading_tool_input_schemas_unchanged() {
     insta::assert_yaml_snapshot!("trading_tool_input_schemas", schemas);
 }
 
+/// Snapshot the descriptor list returned by `prompts/list` — name,
+/// description, and the per-argument shape. Lives in
+/// `tests/snapshots/schema__prompt_descriptors.snap`.
+#[test]
+fn prompt_descriptors_unchanged() {
+    let registry = deribit_mcp::PromptRegistry::build(&ctx(false, false));
+    let prompts: Vec<serde_json::Value> = registry
+        .list()
+        .into_iter()
+        .map(|p| serde_json::to_value(&p).expect("ser"))
+        .collect();
+    insta::assert_yaml_snapshot!("prompt_descriptors", prompts);
+}
+
 /// Snapshot the JSON wire shape of every documented `AdapterError`
 /// variant. The serde-tagged representation is a public contract.
 #[test]

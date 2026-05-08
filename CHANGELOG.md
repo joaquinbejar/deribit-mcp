@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `daily_options_summary` MCP prompt (v0.5-02):
+  - Curated User + Assistant message pair that walks the LLM
+    through "summarise BTC / ETH options expiring in the next N
+    days". Composes the public Read tools `list_instruments`,
+    `get_book_summary_by_currency`, `get_historical_volatility`
+    — the prompt names them and constrains the output sections;
+    it does not call them itself.
+  - Arguments: `currency: String` (`BTC` / `ETH` only;
+    case-normalised), `horizon_days: u8` (range 1..=31).
+    Failures surface as
+    `AdapterError::Validation { field, message }`.
+  - New schema snapshot `tests/snapshots/schema__prompt_descriptors.snap`
+    pins the `prompts/list` wire shape.
+  - Integration tests:
+    `prompts_get_daily_options_summary_returns_well_formed_messages`,
+    `prompts_get_daily_options_summary_rejects_invalid_currency`.
+
 - MCP `prompts` capability + `PromptRegistry` (v0.5-01):
   - New `src/prompts/mod.rs` with `PromptRegistry`,
     `PromptEntry`, and the `PromptHandlerFn` Fn-pointer type.

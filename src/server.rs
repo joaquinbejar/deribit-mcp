@@ -282,8 +282,8 @@ mod tests {
         // the four templates per the v0.1 roadmap.
         assert_eq!(server.resources.resources().len(), 1);
         assert_eq!(server.resources.templates().len(), 4);
-        // v0.5-01 ships an empty prompt registry; the three concrete
-        // prompts land in v0.5-02 / v0.5-03 / v0.5-04.
-        assert!(server.prompts.is_empty());
+        // v0.5-02 ships `daily_options_summary`. v0.5-03 / v0.5-04
+        // append `funding_snapshot` and `position_review`.
+        assert!(server.prompts.contains("daily_options_summary"));
     }
 }

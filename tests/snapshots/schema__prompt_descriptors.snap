@@ -1,0 +1,13 @@
+---
+source: tests/schema.rs
+expression: prompts
+---
+- arguments:
+    - description: "`BTC` or `ETH`. The base currency to summarise."
+      name: currency
+      required: true
+    - description: How many days ahead the summary should reach. Integer in the range 1..=31; values outside the range are rejected.
+      name: horizon_days
+      required: true
+  description: "Summarise BTC / ETH options expiring within the requested horizon using the public Read tools (`list_instruments`, `get_book_summary_by_currency`, `get_historical_volatility`)."
+  name: daily_options_summary
