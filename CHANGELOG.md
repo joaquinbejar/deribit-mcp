@@ -9,6 +9,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- MCP `prompts` capability + `PromptRegistry` (v0.5-01):
+  - New `src/prompts/mod.rs` with `PromptRegistry`,
+    `PromptEntry`, and the `PromptHandlerFn` Fn-pointer type.
+    Mirrors the `tools` registry pattern: build once at startup,
+    frozen for the process lifetime, dispatch by name.
+  - `DeribitMcpServer::server_info()` now advertises the
+    `prompts` capability via
+    `ServerCapabilities::builder().enable_prompts()`.
+    `listChanged` is left unset (omitted from the wire JSON) —
+    the registry is frozen.
+  - `ServerHandler::list_prompts` returns the sorted entry list;
+    `ServerHandler::get_prompt` dispatches via
+    `PromptRegistry::get`. A registry miss (`name` not
+    registered) returns `AdapterError::Validation { field:
+    "name" }` which the rmcp boundary translates into a
+    structured error.
+  - `lib.rs` re-exports `PromptRegistry`, `PromptEntry`,
+    `PromptHandlerFn`.
+  - Unit + integration tests cover the empty-registry list and
+    the unknown-prompt rejection paths. The three concrete
+    prompts (`daily_options_summary`, `funding_snapshot`,
+    `position_review`) ship in the v0.5-02 / v0.5-03 / v0.5-04
+    issues.
+
 - Trading integration coverage + live smoke (v0.4-05):
   - `From<HttpError> for AdapterError` now extracts the
     `"API error: <code> - <message>"` payload that

@@ -1,35 +1,40 @@
 //! `rmcp::ServerHandler` scaffold for the Deribit adapter.
 //!
-//! v0.1-05 wires the handshake (`initialize`, `ping`, empty
-//! `tools/list`, empty `resources/list`, empty
-//! `resources/templates/list`) and pins the protocol revision to
-//! `2025-06-18`. The tool / resource registries are populated in
-//! v0.1-06 / v0.1-07; the dispatcher hooks in `call_tool` and
-//! `read_resource` arrive then.
+//! Wires the handshake (`initialize`, `ping`, `tools/list`,
+//! `resources/list`, `resources/templates/list`, `prompts/list`,
+//! `prompts/get`) and pins the protocol revision to `2025-06-18`.
+//! Tool / resource registries are populated by their per-family
+//! builders in `tools::build` / `resources::build`. Prompts ride
+//! on the same pattern via [`crate::prompts::PromptRegistry`]
+//! (added in v0.5-01).
 //!
 //! Capabilities advertised match `doc/MCP-SPEC.md` §5:
 //!
 //! - `tools` (no `listChanged`).
 //! - `resources` with `subscribe: true` (no `listChanged`).
+//! - `prompts` (no `listChanged`) — added in v0.5-01.
 //! - `logging`.
 //!
-//! `prompts` and `sampling` are deliberately not advertised in v0.1.
+//! `sampling` is deliberately not advertised.
 //!
-//! `listChanged` is left unset on the `tools` and `resources`
-//! capabilities — `rmcp` omits the field from the wire JSON and the MCP
-//! spec treats an omitted `listChanged` as `false`.
+//! `listChanged` is left unset on the `tools`, `resources`, and
+//! `prompts` capabilities — `rmcp` omits the field from the wire
+//! JSON and the MCP spec treats an omitted `listChanged` as `false`.
 
 use std::future::Future;
 use std::sync::Arc;
 
 use rmcp::model::{
-    Implementation, InitializeResult, ListResourceTemplatesResult, ListResourcesResult,
-    ListToolsResult, PaginatedRequestParams, ProtocolVersion, ServerInfo,
+    GetPromptRequestParams, GetPromptResult, Implementation, InitializeResult, ListPromptsResult,
+    ListResourceTemplatesResult, ListResourcesResult, ListToolsResult, PaginatedRequestParams,
+    ProtocolVersion, ServerInfo,
 };
 use rmcp::service::RequestContext;
 use rmcp::{ErrorData as McpError, RoleServer, ServerHandler};
 
 use crate::context::AdapterContext;
+use crate::error::AdapterError;
+use crate::prompts::PromptRegistry;
 use crate::resources::ResourceRegistry;
 use crate::tools::ToolRegistry;
 
@@ -40,33 +45,39 @@ pub const MCP_PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion::V_2025_06_18;
 
 /// `rmcp::ServerHandler` for the Deribit adapter.
 ///
-/// Holds the shared [`AdapterContext`], the registered [`ToolRegistry`]
-/// (built by v0.1-06), and the [`ResourceRegistry`] (built by v0.1-07).
-/// All three are kept behind `Arc` so the handler can be cloned cheaply
-/// across connections (HTTP transport) without rebuilding state.
+/// Holds the shared [`AdapterContext`], the registered
+/// [`ToolRegistry`], the [`ResourceRegistry`], and the
+/// [`PromptRegistry`] (added in v0.5-01). All four are kept
+/// behind `Arc` so the handler can be cloned cheaply across
+/// connections (HTTP transport) without rebuilding state.
 #[derive(Debug, Clone)]
 pub struct DeribitMcpServer {
     /// Shared upstream clients + configuration.
     pub ctx: Arc<AdapterContext>,
-    /// Registered tools — empty in v0.1-05, populated by v0.1-06.
+    /// Registered tools.
     pub tools: Arc<ToolRegistry>,
-    /// Registered resources — empty in v0.1-05, populated by v0.1-07.
+    /// Registered resources.
     pub resources: Arc<ResourceRegistry>,
+    /// Registered prompts (added in v0.5-01).
+    pub prompts: Arc<PromptRegistry>,
 }
 
 impl DeribitMcpServer {
-    /// Construct a server scaffold with the v0.1 registries built
-    /// against the provided context. Tool families are gated by
-    /// effect class (ADR-0003); the resource catalogue is populated
-    /// from the `deribit://` template set.
+    /// Construct a server scaffold with every registry built against
+    /// the provided context. Tool families are gated by effect class
+    /// (ADR-0003); the resource catalogue is populated from the
+    /// `deribit://` template set; the prompt registry is populated
+    /// by [`PromptRegistry::build`].
     #[must_use]
     pub fn new(ctx: Arc<AdapterContext>) -> Self {
         let tools = ToolRegistry::build(&ctx);
         let resources = ResourceRegistry::build();
+        let prompts = PromptRegistry::build(&ctx);
         Self {
             ctx,
             tools: Arc::new(tools),
             resources: Arc::new(resources),
+            prompts: Arc::new(prompts),
         }
     }
 
@@ -79,6 +90,7 @@ impl DeribitMcpServer {
             .enable_tools()
             .enable_resources()
             .enable_resources_subscribe()
+            .enable_prompts()
             .build();
 
         InitializeResult::new(capabilities)
@@ -139,6 +151,57 @@ impl ServerHandler for DeribitMcpServer {
             })
         }
     }
+
+    fn list_prompts(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> impl Future<Output = Result<ListPromptsResult, McpError>> + Send + '_ {
+        let prompts = self.prompts.list();
+        async move {
+            Ok(ListPromptsResult {
+                prompts,
+                next_cursor: None,
+                meta: None,
+            })
+        }
+    }
+
+    fn get_prompt(
+        &self,
+        request: GetPromptRequestParams,
+        _context: RequestContext<RoleServer>,
+    ) -> impl Future<Output = Result<GetPromptResult, McpError>> + Send + '_ {
+        let ctx = self.ctx.clone();
+        let prompts = self.prompts.clone();
+        async move {
+            let args = request.arguments.unwrap_or_default();
+            prompts
+                .get(&ctx, &request.name, args)
+                .await
+                .map_err(map_adapter_error)
+        }
+    }
+}
+
+/// Translate an [`AdapterError`] into the rmcp `McpError` shape
+/// that `rmcp` propagates over the wire.
+///
+/// Every [`AdapterError::Validation`] — including the
+/// registry-miss path with `field == "name"` and per-handler
+/// argument-validation failures — maps to
+/// [`McpError::invalid_params`] so MCP clients see a uniform
+/// "your input is wrong" signal and can correct the call. Other
+/// adapter errors flow through [`McpError::internal_error`] with
+/// the structured payload preserved so the LLM still sees the
+/// `kind`-tagged JSON.
+fn map_adapter_error(err: AdapterError) -> McpError {
+    let payload = serde_json::to_value(&err).unwrap_or(serde_json::Value::Null);
+    let message = err.to_string();
+    match err {
+        AdapterError::Validation { .. } => McpError::invalid_params(message, Some(payload)),
+        _ => McpError::internal_error(message, Some(payload)),
+    }
 }
 
 #[cfg(test)]
@@ -169,7 +232,7 @@ mod tests {
     }
 
     #[test]
-    fn server_info_advertises_tools_resources_logging() {
+    fn server_info_advertises_tools_resources_prompts_logging() {
         let info = DeribitMcpServer::server_info();
         assert!(info.capabilities.tools.is_some());
         let res = info
@@ -182,8 +245,13 @@ mod tests {
         let tools = info.capabilities.tools.as_ref().expect("tools capability");
         assert_eq!(tools.list_changed, None);
         assert!(info.capabilities.logging.is_some());
-        // Prompts and sampling are deliberately not advertised in v0.1.
-        assert!(info.capabilities.prompts.is_none());
+        // Prompts capability is advertised from v0.5-01 onward.
+        let prompts = info
+            .capabilities
+            .prompts
+            .as_ref()
+            .expect("prompts capability");
+        assert_eq!(prompts.list_changed, None);
     }
 
     #[test]
@@ -214,5 +282,8 @@ mod tests {
         // the four templates per the v0.1 roadmap.
         assert_eq!(server.resources.resources().len(), 1);
         assert_eq!(server.resources.templates().len(), 4);
+        // v0.5-01 ships an empty prompt registry; the three concrete
+        // prompts land in v0.5-02 / v0.5-03 / v0.5-04.
+        assert!(server.prompts.is_empty());
     }
 }

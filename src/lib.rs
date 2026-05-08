@@ -23,6 +23,7 @@
 //! - [`observability`] — `tracing` setup and secret redaction.
 //! - [`tools`] — `Read` / `Account` / `Trading` tool families.
 //! - [`resources`] — static and live resource families.
+//! - [`prompts`] — curated MCP prompts (registry + handlers).
 //! - [`prelude`] — curated re-exports for downstream consumers.
 
 #![forbid(unsafe_code)]
@@ -36,12 +37,14 @@ pub mod error;
 pub mod http_transport;
 pub mod observability;
 pub mod prelude;
+pub mod prompts;
 pub mod resources;
 pub mod server;
 pub mod tools;
 
 pub use crate::context::{AdapterContext, AuthState};
 pub use crate::error::{AdapterError, AuthFailureReason, UpstreamErrorKind};
+pub use crate::prompts::{PromptEntry, PromptHandlerFn, PromptRegistry};
 pub use crate::resources::{
     ResourceContent, ResourceList, ResourceRegistry, ResourceUri, parse_resource_uri,
 };

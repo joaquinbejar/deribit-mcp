@@ -1178,3 +1178,27 @@ async fn cancel_all_by_currency_zero_count_returns_zero() {
         .expect("ok");
     assert_eq!(out["cancelled"].as_u64(), Some(0));
 }
+
+#[tokio::test]
+async fn prompts_list_returns_empty_for_baseline_registry() {
+    use deribit_mcp::PromptRegistry;
+    let ctx = ctx_with_mock("http://127.0.0.1:0/");
+    let registry = PromptRegistry::build(&ctx);
+    assert!(registry.is_empty());
+    assert_eq!(registry.list().len(), 0);
+}
+
+#[tokio::test]
+async fn prompts_get_unknown_returns_validation() {
+    use deribit_mcp::PromptRegistry;
+    let ctx = ctx_with_mock("http://127.0.0.1:0/");
+    let registry = PromptRegistry::build(&ctx);
+    let err = registry
+        .get(&ctx, "no_such_prompt", serde_json::Map::new())
+        .await
+        .unwrap_err();
+    match err {
+        AdapterError::Validation { field, .. } => assert_eq!(field, "name"),
+        other => panic!("unexpected: {other:?}"),
+    }
+}

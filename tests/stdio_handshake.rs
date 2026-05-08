@@ -104,8 +104,8 @@ async fn initialize_handshake_round_trips_over_in_memory_stdio() {
         "tools capability advertised"
     );
     assert!(
-        response["result"]["capabilities"]["prompts"].is_null(),
-        "prompts NOT advertised in v0.1"
+        response["result"]["capabilities"]["prompts"].is_object(),
+        "prompts capability advertised from v0.5-01"
     );
 
     // Drop the client writer so the server's stdin sees EOF and the
