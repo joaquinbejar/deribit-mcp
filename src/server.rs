@@ -25,10 +25,11 @@ use std::future::Future;
 use std::sync::Arc;
 
 use rmcp::model::{
-    CallToolRequestParams, CallToolResult, GetPromptRequestParams, GetPromptResult, Implementation,
-    InitializeResult, ListPromptsResult, ListResourceTemplatesResult, ListResourcesResult,
-    ListToolsResult, PaginatedRequestParams, ProtocolVersion, ReadResourceRequestParams,
-    ReadResourceResult, ResourceContents, ServerInfo,
+    AnnotateAble, CallToolRequestParams, CallToolResult, Content, GetPromptRequestParams,
+    GetPromptResult, Implementation, InitializeResult, ListPromptsResult,
+    ListResourceTemplatesResult, ListResourcesResult, ListToolsResult, PaginatedRequestParams,
+    ProtocolVersion, RawContent, ReadResourceRequestParams, ReadResourceResult, ResourceContents,
+    ServerInfo,
 };
 use rmcp::service::RequestContext;
 use rmcp::{ErrorData as McpError, RoleServer, ServerHandler};
@@ -288,20 +289,40 @@ impl ServerHandler for DeribitMcpServer {
 }
 
 /// Wrap a successful tool JSON payload into the MCP `CallToolResult`
-/// envelope. Both the structured form (`structured_content`) and the
-/// stringified text form (`content[0]`) are populated so MCP clients
-/// that haven't adopted SEP-1319's structured content yet still see
-/// the data verbatim.
+/// envelope.
+///
+/// The MCP spec (2025-06-18) constrains `structuredContent` to a
+/// JSON **object** — clients (e.g. `mcp-remote`) reject scalars
+/// and arrays at the schema-validation step. So:
+///
+/// - Object values → set both `structuredContent` (verbatim) and
+///   `content[0]` (stringified) so old + new clients see the data.
+/// - Scalar / array values → wrap into `{"value": <…>}` so the
+///   structured shape stays a valid object while the original
+///   payload is still recoverable from `content[0]`.
 fn call_tool_result_from_value(value: &serde_json::Value) -> CallToolResult {
-    CallToolResult::structured(value.clone())
+    let structured = if value.is_object() {
+        value.clone()
+    } else {
+        serde_json::json!({ "value": value })
+    };
+    let mut result = CallToolResult::structured(structured);
+    // Replace the auto-generated stringified content with the
+    // original payload (un-wrapped) so clients that read
+    // `content[0].text` still get the raw value, not the
+    // `{"value": …}` wrapper.
+    let raw = RawContent::text(serde_json::to_string(value).unwrap_or_else(|_| value.to_string()));
+    result.content = vec![Content::from(raw.no_annotation())];
+    result
 }
 
 /// Wrap an [`AdapterError`] into a `CallToolResult` with `is_error =
 /// true`. The error's `kind`-tagged JSON is preserved in
-/// `structured_content`, plus a human-readable summary in
-/// `content[0]`. We deliberately surface tool errors as a successful
-/// JSON-RPC response (not an `McpError`) so the LLM sees the full
-/// structured payload — see the MCP spec §`tools/call` errors.
+/// `structured_content` (already an object) plus a human-readable
+/// summary in `content[0]`. Tool errors are surfaced as a
+/// successful JSON-RPC response (not an `McpError`) so the LLM
+/// sees the full structured payload — see the MCP spec §`tools/call`
+/// errors.
 fn call_tool_result_from_error(err: &AdapterError) -> CallToolResult {
     let payload = serde_json::to_value(err).unwrap_or(serde_json::Value::Null);
     CallToolResult::structured_error(payload)
@@ -363,6 +384,42 @@ mod tests {
             order_transport: OrderTransport::Http,
         };
         Arc::new(AdapterContext::new(Arc::new(cfg)).expect("ctx"))
+    }
+
+    #[test]
+    fn call_tool_result_wraps_scalar_in_object_for_structured_content() {
+        // MCP 2025-06-18 spec: `structuredContent` MUST be an object.
+        // `get_server_time` returns a bare `u64`; if we emitted
+        // `structuredContent: 1778230818914` mcp-remote /
+        // Claude Desktop would reject the response with a schema
+        // validation error.
+        let scalar = serde_json::json!(1_778_230_818_914_i64);
+        let result = call_tool_result_from_value(&scalar);
+        let sc = result.structured_content.expect("structured_content set");
+        assert!(sc.is_object(), "structured_content must be an object: {sc}");
+        assert_eq!(sc["value"], scalar, "scalar preserved under `value` key");
+        // The original payload is still recoverable from content[0].
+        let rmcp::model::RawContent::Text(ref text) = result.content[0].raw else {
+            panic!("expected text content");
+        };
+        assert_eq!(text.text, "1778230818914");
+    }
+
+    #[test]
+    fn call_tool_result_passes_through_object_unchanged() {
+        let value = serde_json::json!({"instrument_name":"BTC-PERPETUAL","mark_price":50_000.0});
+        let result = call_tool_result_from_value(&value);
+        let sc = result.structured_content.expect("structured_content set");
+        assert_eq!(sc, value, "object payload not wrapped");
+    }
+
+    #[test]
+    fn call_tool_result_wraps_array_in_object() {
+        let value = serde_json::json!([1, 2, 3]);
+        let result = call_tool_result_from_value(&value);
+        let sc = result.structured_content.expect("structured_content set");
+        assert!(sc.is_object());
+        assert_eq!(sc["value"], value);
     }
 
     #[test]
