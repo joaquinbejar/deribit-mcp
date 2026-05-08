@@ -45,10 +45,11 @@ pub const MCP_PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion::V_2025_06_18;
 
 /// `rmcp::ServerHandler` for the Deribit adapter.
 ///
-/// Holds the shared [`AdapterContext`], the registered [`ToolRegistry`]
-/// (built by v0.1-06), and the [`ResourceRegistry`] (built by v0.1-07).
-/// All three are kept behind `Arc` so the handler can be cloned cheaply
-/// across connections (HTTP transport) without rebuilding state.
+/// Holds the shared [`AdapterContext`], the registered
+/// [`ToolRegistry`], the [`ResourceRegistry`], and the
+/// [`PromptRegistry`] (added in v0.5-01). All four are kept
+/// behind `Arc` so the handler can be cloned cheaply across
+/// connections (HTTP transport) without rebuilding state.
 #[derive(Debug, Clone)]
 pub struct DeribitMcpServer {
     /// Shared upstream clients + configuration.
@@ -183,22 +184,23 @@ impl ServerHandler for DeribitMcpServer {
     }
 }
 
-/// Translate an [`AdapterError`] into the rmcp `McpError` shape that
-/// `rmcp` propagates over the wire. Validation errors with
-/// `field == "name"` (the registry-miss path) become
-/// `method_not_found`-style errors so the LLM client sees the
-/// standard MCP shape; everything else becomes `invalid_params`
-/// with the original `serde_json` payload preserved.
+/// Translate an [`AdapterError`] into the rmcp `McpError` shape
+/// that `rmcp` propagates over the wire.
+///
+/// Every [`AdapterError::Validation`] — including the
+/// registry-miss path with `field == "name"` and per-handler
+/// argument-validation failures — maps to
+/// [`McpError::invalid_params`] so MCP clients see a uniform
+/// "your input is wrong" signal and can correct the call. Other
+/// adapter errors flow through [`McpError::internal_error`] with
+/// the structured payload preserved so the LLM still sees the
+/// `kind`-tagged JSON.
 fn map_adapter_error(err: AdapterError) -> McpError {
+    let payload = serde_json::to_value(&err).unwrap_or(serde_json::Value::Null);
+    let message = err.to_string();
     match err {
-        AdapterError::Validation { ref field, .. } if field == "name" => McpError::invalid_params(
-            err.to_string(),
-            Some(serde_json::to_value(&err).unwrap_or(serde_json::Value::Null)),
-        ),
-        other => McpError::internal_error(
-            other.to_string(),
-            Some(serde_json::to_value(&other).unwrap_or(serde_json::Value::Null)),
-        ),
+        AdapterError::Validation { .. } => McpError::invalid_params(message, Some(payload)),
+        _ => McpError::internal_error(message, Some(payload)),
     }
 }
 

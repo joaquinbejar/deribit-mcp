@@ -186,9 +186,12 @@ mod tests {
 
     #[tokio::test]
     async fn unknown_prompt_returns_validation() {
-        let registry = PromptRegistry::build(&ctx());
+        // Bind the context once so the borrow lives across the
+        // `.await` even with no implicit-temporary-extension drama.
+        let ctx = ctx();
+        let registry = PromptRegistry::build(&ctx);
         let err = registry
-            .get(&ctx(), "no_such_prompt", JsonObject::new())
+            .get(&ctx, "no_such_prompt", JsonObject::new())
             .await
             .unwrap_err();
         match err {
