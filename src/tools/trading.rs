@@ -242,6 +242,17 @@ fn build_fix_new_order_request(
         TriggerType as FixTrigger,
     };
 
+    // `deribit-fix 0.3`'s `NewOrderRequest` does not carry an
+    // `mmp` field. Silently dropping the caller flag would make
+    // the FIX path quietly diverge from the HTTP path, so refuse
+    // up-front with a structured error.
+    if input.mmp.is_some() {
+        return Err(AdapterError::Validation {
+            field: "mmp".to_string(),
+            message: "`mmp` is not supported by the FIX transport (deribit-fix 0.3)".to_string(),
+        });
+    }
+
     let order_type = match input.order_type {
         PlaceOrderType::Limit => FixOrderType::Limit,
         PlaceOrderType::Market => FixOrderType::Market,
@@ -1231,6 +1242,15 @@ mod tests {
         assert!(
             matches!(err, AdapterError::Validation { ref field, .. } if field == "valid_until")
         );
+    }
+
+    #[cfg(feature = "fix")]
+    #[test]
+    fn build_fix_new_order_request_rejects_mmp() {
+        let mut input = limit_input();
+        input.mmp = Some(true);
+        let err = build_fix_new_order_request(input).unwrap_err();
+        assert!(matches!(err, AdapterError::Validation { ref field, .. } if field == "mmp"));
     }
 
     #[cfg(feature = "fix")]
