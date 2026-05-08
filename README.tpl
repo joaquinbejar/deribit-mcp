@@ -1,7 +1,3 @@
-<div style="text-align: center;">
-<img src="https://raw.githubusercontent.com/joaquinbejar/deribit-mcp/refs/heads/main/doc/images/logo.png" alt="deribit-mcp" style="width: 80%; height: 80%;">
-</div>
-
 [![License](https://img.shields.io/badge/license-MIT-blue)](./LICENSE)
 [![Crates.io](https://img.shields.io/crates/v/deribit-mcp.svg)](https://crates.io/crates/deribit-mcp)
 [![Downloads](https://img.shields.io/crates/d/deribit-mcp.svg)](https://crates.io/crates/deribit-mcp)
