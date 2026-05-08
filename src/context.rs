@@ -229,7 +229,18 @@ fn http_config_from(config: &Config) -> Result<HttpConfig, AdapterError> {
     } else {
         HttpConfig::production()
     };
-    cfg.base_url = parsed;
+    // Only override `base_url` when the caller has actually
+    // supplied a custom path (proxy / fork). The upstream's
+    // `testnet()` / `production()` constructors already pin
+    // `https://(test|www).deribit.com/api/v2`. A bare host like
+    // `https://test.deribit.com` (no trailing path) would strip
+    // the `/api/v2` suffix and turn every request into a 404 —
+    // see deribit-http's `TESTNET_BASE_URL` /
+    // `PRODUCTION_BASE_URL` constants.
+    let user_supplied_path = !matches!(parsed.path(), "" | "/");
+    if user_supplied_path {
+        cfg.base_url = parsed;
+    }
     cfg.testnet = testnet;
     // Match on references first so we never clone the secret on the
     // partial-credential branch (where the clone would be discarded

@@ -173,7 +173,14 @@ impl Config {
                     .expect("invalid default listen addr")
             });
 
-        let http_bearer_token = std::env::var("DERIBIT_HTTP_BEARER_TOKEN").ok();
+        // Treat an empty string as unset. `.env` files from
+        // docker-compose stacks tend to ship `KEY=` lines for
+        // optional settings; without this filter the empty string
+        // would activate the bearer-token middleware and 401 every
+        // request.
+        let http_bearer_token = std::env::var("DERIBIT_HTTP_BEARER_TOKEN")
+            .ok()
+            .filter(|v| !v.is_empty());
 
         let order_transport = args
             .order_transport()

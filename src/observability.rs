@@ -48,7 +48,13 @@ pub fn init(config: &Config) {
         .with(fmt_layer)
         .with(redaction_layer);
 
-    let _guard = tracing::subscriber::set_default(subscriber);
+    // `set_global_default` installs the subscriber for the whole
+    // process. The earlier code used `set_default`, which returns a
+    // scope-local `DefaultGuard` that dropped at function exit —
+    // silently swallowing every event after the startup line.
+    if let Err(err) = tracing::subscriber::set_global_default(subscriber) {
+        eprintln!("tracing subscriber already installed: {err}");
+    }
 
     tracing::info!(
         transport = ?config.transport,

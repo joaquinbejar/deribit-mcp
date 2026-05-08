@@ -25,9 +25,10 @@ use std::future::Future;
 use std::sync::Arc;
 
 use rmcp::model::{
-    GetPromptRequestParams, GetPromptResult, Implementation, InitializeResult, ListPromptsResult,
-    ListResourceTemplatesResult, ListResourcesResult, ListToolsResult, PaginatedRequestParams,
-    ProtocolVersion, ServerInfo,
+    CallToolRequestParams, CallToolResult, GetPromptRequestParams, GetPromptResult, Implementation,
+    InitializeResult, ListPromptsResult, ListResourceTemplatesResult, ListResourcesResult,
+    ListToolsResult, PaginatedRequestParams, ProtocolVersion, ReadResourceRequestParams,
+    ReadResourceResult, ResourceContents, ServerInfo,
 };
 use rmcp::service::RequestContext;
 use rmcp::{ErrorData as McpError, RoleServer, ServerHandler};
@@ -35,7 +36,7 @@ use rmcp::{ErrorData as McpError, RoleServer, ServerHandler};
 use crate::context::AdapterContext;
 use crate::error::AdapterError;
 use crate::prompts::PromptRegistry;
-use crate::resources::ResourceRegistry;
+use crate::resources::{ResourceContent, ResourceRegistry, parse_resource_uri};
 use crate::tools::ToolRegistry;
 
 /// MCP protocol revision pinned by `deribit-mcp`. The crate is built
@@ -176,10 +177,148 @@ impl ServerHandler for DeribitMcpServer {
         let prompts = self.prompts.clone();
         async move {
             let args = request.arguments.unwrap_or_default();
-            prompts
-                .get(&ctx, &request.name, args)
-                .await
-                .map_err(map_adapter_error)
+            tracing::info!(target: "deribit_mcp::request", prompt = %request.name, "prompts/get");
+            match prompts.get(&ctx, &request.name, args).await {
+                Ok(result) => {
+                    tracing::info!(
+                        target: "deribit_mcp::request",
+                        prompt = %request.name,
+                        "prompts/get ok"
+                    );
+                    Ok(result)
+                }
+                Err(err) => {
+                    tracing::warn!(
+                        target: "deribit_mcp::request",
+                        prompt = %request.name,
+                        error = %err,
+                        "prompts/get error"
+                    );
+                    Err(map_adapter_error(err))
+                }
+            }
+        }
+    }
+
+    fn call_tool(
+        &self,
+        request: CallToolRequestParams,
+        _context: RequestContext<RoleServer>,
+    ) -> impl Future<Output = Result<CallToolResult, McpError>> + Send + '_ {
+        let ctx = self.ctx.clone();
+        let tools = self.tools.clone();
+        async move {
+            let name = request.name.into_owned();
+            let arguments = serde_json::Value::Object(request.arguments.unwrap_or_default());
+            tracing::info!(target: "deribit_mcp::request", tool = %name, "tools/call");
+            let started = std::time::Instant::now();
+            let outcome = tools.call(&ctx, &name, arguments).await;
+            let elapsed_ms = started.elapsed().as_millis() as u64;
+            match outcome {
+                Ok(value) => {
+                    tracing::info!(
+                        target: "deribit_mcp::request",
+                        tool = %name,
+                        elapsed_ms,
+                        "tools/call ok"
+                    );
+                    Ok(call_tool_result_from_value(&value))
+                }
+                Err(err) => {
+                    tracing::warn!(
+                        target: "deribit_mcp::request",
+                        tool = %name,
+                        elapsed_ms,
+                        error = %err,
+                        "tools/call error"
+                    );
+                    Ok(call_tool_result_from_error(&err))
+                }
+            }
+        }
+    }
+
+    fn read_resource(
+        &self,
+        request: ReadResourceRequestParams,
+        _context: RequestContext<RoleServer>,
+    ) -> impl Future<Output = Result<ReadResourceResult, McpError>> + Send + '_ {
+        let ctx = self.ctx.clone();
+        let resources = self.resources.clone();
+        async move {
+            tracing::info!(target: "deribit_mcp::request", uri = %request.uri, "resources/read");
+            let started = std::time::Instant::now();
+            let uri = match parse_resource_uri(&request.uri) {
+                Ok(uri) => uri,
+                Err(err) => {
+                    tracing::warn!(
+                        target: "deribit_mcp::request",
+                        uri = %request.uri,
+                        error = %err,
+                        "resources/read parse error"
+                    );
+                    return Err(map_adapter_error(err));
+                }
+            };
+            match resources.read(&ctx, &uri).await {
+                Ok(content) => {
+                    let elapsed_ms = started.elapsed().as_millis() as u64;
+                    tracing::info!(
+                        target: "deribit_mcp::request",
+                        uri = %request.uri,
+                        elapsed_ms,
+                        "resources/read ok"
+                    );
+                    Ok(read_resource_result_from_content(&request.uri, content))
+                }
+                Err(err) => {
+                    let elapsed_ms = started.elapsed().as_millis() as u64;
+                    tracing::warn!(
+                        target: "deribit_mcp::request",
+                        uri = %request.uri,
+                        elapsed_ms,
+                        error = %err,
+                        "resources/read error"
+                    );
+                    Err(map_adapter_error(err))
+                }
+            }
+        }
+    }
+}
+
+/// Wrap a successful tool JSON payload into the MCP `CallToolResult`
+/// envelope. Both the structured form (`structured_content`) and the
+/// stringified text form (`content[0]`) are populated so MCP clients
+/// that haven't adopted SEP-1319's structured content yet still see
+/// the data verbatim.
+fn call_tool_result_from_value(value: &serde_json::Value) -> CallToolResult {
+    CallToolResult::structured(value.clone())
+}
+
+/// Wrap an [`AdapterError`] into a `CallToolResult` with `is_error =
+/// true`. The error's `kind`-tagged JSON is preserved in
+/// `structured_content`, plus a human-readable summary in
+/// `content[0]`. We deliberately surface tool errors as a successful
+/// JSON-RPC response (not an `McpError`) so the LLM sees the full
+/// structured payload — see the MCP spec §`tools/call` errors.
+fn call_tool_result_from_error(err: &AdapterError) -> CallToolResult {
+    let payload = serde_json::to_value(err).unwrap_or(serde_json::Value::Null);
+    CallToolResult::structured_error(payload)
+}
+
+/// Convert a [`ResourceContent`] read into the MCP `ReadResourceResult`
+/// envelope.
+fn read_resource_result_from_content(uri: &str, content: ResourceContent) -> ReadResourceResult {
+    match content {
+        ResourceContent::Json(value) => {
+            let text = serde_json::to_string(&value).unwrap_or_else(|_| value.to_string());
+            ReadResourceResult::new(vec![ResourceContents::TextResourceContents {
+                uri: uri.to_string(),
+                mime_type: Some("application/json".to_string()),
+                text,
+                meta: None,
+            }])
         }
     }
 }
