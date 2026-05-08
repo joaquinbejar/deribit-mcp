@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `--order-transport=http|fix` CLI flag + config plumbing
+  (v0.6-01):
+  - New `Config::order_transport: OrderTransport` field with
+    `Http` (default — v0.1..v0.5 behaviour) and `Fix` variants.
+    The startup guard uses an exhaustive `match` so adding a
+    future variant fails to compile until the gating is
+    revisited.
+  - CLI: `--order-transport=http|fix`.
+  - Env: `DERIBIT_ORDER_TRANSPORT=http|fix`.
+  - Resolution: CLI > env > default `Http`.
+  - Startup guard: `Config::load` refuses to build when
+    `order_transport == Fix` and `allow_trading == false` so
+    the adapter does not start in a state where the FIX session
+    would never be reached. Surfaces as a structured `anyhow`
+    error from `main()` exit-code 1.
+  - The actual FIX session lifecycle and trading-tool dispatch
+    routing land in v0.6-02 / v0.6-03.
+
 - `position_review` MCP prompt (v0.5-04):
   - Drives the LLM through an end-of-day account / position
     review using the v0.2 Account tools (`get_account_summary`,

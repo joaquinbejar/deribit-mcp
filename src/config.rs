@@ -31,6 +31,9 @@ pub struct Config {
     pub http_bearer_token: Option<String>,
     /// Log format: `text` or `json`.
     pub log_format: LogFormat,
+    /// Upstream transport selection for `Trading` tool dispatch
+    /// (`http` default, `fix` opt-in via v0.6).
+    pub order_transport: OrderTransport,
 }
 
 /// MCP transport selection.
@@ -49,6 +52,34 @@ pub enum LogFormat {
     Text,
     /// JSON structured logs (default for http).
     Json,
+}
+
+/// Upstream transport for `Trading` tool dispatch.
+///
+/// `Http` is the default and matches the v0.1..v0.5 behaviour:
+/// every `place_order` / `edit_order` / `cancel_order` /
+/// `cancel_all_*` call hits the Deribit REST API via the
+/// `deribit-http` client. `Fix` opts the trading family into the
+/// lazy FIX-session path landed in v0.6-02 / v0.6-03.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OrderTransport {
+    /// REST over HTTP (default; v0.1..v0.5 behaviour).
+    Http,
+    /// FIX 4.4 over TCP via `deribit-fix`. Requires `--allow-trading`.
+    Fix,
+}
+
+impl OrderTransport {
+    /// Parse the user-facing string form (`http` / `fix`). Used by
+    /// both the CLI parser and the env-var parser so the two stay
+    /// in lockstep.
+    fn parse(s: &str) -> Option<Self> {
+        match s {
+            "http" => Some(Self::Http),
+            "fix" => Some(Self::Fix),
+            _ => None,
+        }
+    }
 }
 
 impl Config {
@@ -119,6 +150,30 @@ impl Config {
 
         let http_bearer_token = std::env::var("DERIBIT_HTTP_BEARER_TOKEN").ok();
 
+        let order_transport = args
+            .order_transport()
+            .or_else(|| {
+                std::env::var("DERIBIT_ORDER_TRANSPORT")
+                    .ok()
+                    .and_then(|v| OrderTransport::parse(&v))
+            })
+            .unwrap_or(OrderTransport::Http);
+
+        // Exhaustive match — the compiler refuses to compile this
+        // block once a new `OrderTransport` variant is added, forcing
+        // a reviewer to decide whether the new transport needs the
+        // same gating.
+        match order_transport {
+            OrderTransport::Fix if !allow_trading => {
+                anyhow::bail!(
+                    "`--order-transport=fix` (or DERIBIT_ORDER_TRANSPORT=fix) requires \
+                     `--allow-trading` (or DERIBIT_ALLOW_TRADING=1) — without trading \
+                     the FIX session would never be reached"
+                );
+            }
+            OrderTransport::Fix | OrderTransport::Http => {}
+        }
+
         #[allow(clippy::unnecessary_lazy_evaluations)]
         let log_format = args
             .log_format()
@@ -146,6 +201,7 @@ impl Config {
             http_listen,
             http_bearer_token,
             log_format,
+            order_transport,
         })
     }
 }
@@ -188,6 +244,10 @@ struct Args {
     #[arg(long, help = "Log format: text or json")]
     log_format: Option<String>,
 
+    /// Upstream transport for trading tools: http (default) or fix.
+    #[arg(long, help = "Order transport: http or fix")]
+    order_transport: Option<String>,
+
     /// Path to `.env` file (default: `./.env` if exists).
     #[arg(long, help = "Path to .env file")]
     env_file: Option<PathBuf>,
@@ -227,6 +287,13 @@ impl Args {
             _ => None,
         })
     }
+
+    /// Parse order-transport flag.
+    fn order_transport(&self) -> Option<OrderTransport> {
+        self.order_transport
+            .as_ref()
+            .and_then(|t| OrderTransport::parse(t))
+    }
 }
 
 #[cfg(test)]
@@ -246,5 +313,47 @@ mod tests {
         };
         assert_eq!(stdio_default, LogFormat::Text);
         assert_eq!(http_default, LogFormat::Json);
+    }
+
+    /// Reproduce the `OrderTransport::Fix` requires-trading guard
+    /// from `Config::load` directly: the guard runs against locally
+    /// resolved values so it can be exercised without
+    /// `Config::load`'s CLI-arg path. Mirrors the production
+    /// `match` so adding a new `OrderTransport` variant fails to
+    /// compile in both places.
+    fn fix_requires_trading_guard(
+        order_transport: OrderTransport,
+        allow_trading: bool,
+    ) -> Result<(), &'static str> {
+        match order_transport {
+            OrderTransport::Fix if !allow_trading => Err(
+                "`--order-transport=fix` (or DERIBIT_ORDER_TRANSPORT=fix) requires `--allow-trading`",
+            ),
+            OrderTransport::Fix | OrderTransport::Http => Ok(()),
+        }
+    }
+
+    #[test]
+    fn fix_without_allow_trading_is_rejected() {
+        assert!(fix_requires_trading_guard(OrderTransport::Fix, false).is_err());
+    }
+
+    #[test]
+    fn fix_with_allow_trading_is_accepted() {
+        fix_requires_trading_guard(OrderTransport::Fix, true).unwrap();
+    }
+
+    #[test]
+    fn http_default_does_not_require_trading() {
+        fix_requires_trading_guard(OrderTransport::Http, false).unwrap();
+    }
+
+    #[test]
+    fn order_transport_parse_round_trip() {
+        assert_eq!(OrderTransport::parse("http"), Some(OrderTransport::Http));
+        assert_eq!(OrderTransport::parse("fix"), Some(OrderTransport::Fix));
+        assert_eq!(OrderTransport::parse("HTTP"), None);
+        assert_eq!(OrderTransport::parse(""), None);
+        assert_eq!(OrderTransport::parse("rest"), None);
     }
 }

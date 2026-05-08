@@ -174,7 +174,7 @@ impl PromptRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{Config, LogFormat, Transport};
+    use crate::config::{Config, LogFormat, OrderTransport, Transport};
     use std::net::SocketAddr;
 
     fn ctx() -> Arc<AdapterContext> {
@@ -188,6 +188,7 @@ mod tests {
             http_listen: SocketAddr::from(([127, 0, 0, 1], 8723)),
             http_bearer_token: None,
             log_format: LogFormat::Text,
+            order_transport: OrderTransport::Http,
         };
         Arc::new(AdapterContext::new(Arc::new(cfg)).expect("ctx"))
     }

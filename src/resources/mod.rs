@@ -640,7 +640,7 @@ mod tests {
     }
 
     fn ctx() -> AdapterContext {
-        use crate::config::{Config, LogFormat, Transport};
+        use crate::config::{Config, LogFormat, OrderTransport, Transport};
         use std::net::SocketAddr;
         use std::sync::Arc;
         let cfg = Config {
@@ -653,6 +653,7 @@ mod tests {
             http_listen: SocketAddr::from(([127, 0, 0, 1], 8723)),
             http_bearer_token: None,
             log_format: LogFormat::Text,
+            order_transport: OrderTransport::Http,
         };
         AdapterContext::new(Arc::new(cfg)).expect("ctx")
     }

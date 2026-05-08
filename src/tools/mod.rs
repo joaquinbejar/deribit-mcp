@@ -293,7 +293,7 @@ fn check_class_enabled(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{Config, LogFormat, Transport};
+    use crate::config::{Config, LogFormat, OrderTransport, Transport};
     use rmcp::model::Tool;
     use serde_json::json;
     use std::net::SocketAddr;
@@ -310,6 +310,7 @@ mod tests {
             http_listen: SocketAddr::from(([127, 0, 0, 1], 8723)),
             http_bearer_token: None,
             log_format: LogFormat::Text,
+            order_transport: OrderTransport::Http,
         }
     }
 

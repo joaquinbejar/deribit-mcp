@@ -14,7 +14,7 @@
 use std::sync::Arc;
 
 use deribit_http::{DeribitHttpClient, HttpConfig};
-use deribit_mcp::config::{Config, LogFormat, Transport};
+use deribit_mcp::config::{Config, LogFormat, OrderTransport, Transport};
 use deribit_mcp::context::AdapterContext;
 use deribit_mcp::error::AdapterError;
 use deribit_mcp::resources::{ResourceContent, ResourceRegistry, ResourceUri};
@@ -35,6 +35,7 @@ fn cfg(endpoint: &str, with_creds: bool, allow_trading: bool) -> Config {
         http_listen: SocketAddr::from(([127, 0, 0, 1], 8723)),
         http_bearer_token: None,
         log_format: LogFormat::Text,
+        order_transport: OrderTransport::Http,
     }
 }
 

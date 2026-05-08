@@ -17,7 +17,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use deribit_mcp::config::{Config, LogFormat, Transport};
+use deribit_mcp::config::{Config, LogFormat, OrderTransport, Transport};
 use deribit_mcp::context::AdapterContext;
 use deribit_mcp::http_transport;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -35,6 +35,7 @@ fn cfg(listen: std::net::SocketAddr, bearer: Option<&str>) -> Config {
         http_listen: listen,
         http_bearer_token: bearer.map(str::to_string),
         log_format: LogFormat::Json,
+        order_transport: OrderTransport::Http,
     }
 }
 
