@@ -16,9 +16,12 @@ v1.0-01 (#46). The MCP wire surface — tool / resource / prompt
 catalogue, every input + output struct, the `AdapterError` JSON
 shape, and the resource URI templates — is now under the
 SemVer guarantee: any future change that would alter a
-documented field, rename a closed-set enum variant, or remove
-an existing tool / resource / prompt requires a 2.0 major
-bump.
+documented field, rename a closed-set enum variant, **add a new
+variant to a closed-set enum that is not `#[non_exhaustive]`**,
+or remove an existing tool / resource / prompt requires a 2.0
+major bump. `ToolClass` is the only enum on the public surface
+marked `#[non_exhaustive]` today; adding new families there is
+explicitly forward-compatible.
 
 The schema snapshots committed under `tests/snapshots/` are the
 binding wire-shape contract. CI runs the full suite on every
@@ -34,8 +37,9 @@ PR; an unreviewed snapshot diff fails the build.
   templates (`instruments`, `book`, `ticker`, `trades`; v0.1).
 - 3 live resource families wired through a refcounted
   `LiveRegistry` over `deribit-websocket` (v0.3).
-- 4 curated MCP prompts (`daily_options_summary`,
-  `funding_snapshot`, `position_review`; v0.5-01..04).
+- 3 curated MCP prompts (`daily_options_summary`,
+  `funding_snapshot`, `position_review`) on top of the
+  `prompts` capability skeleton in v0.5-01..04.
 - Dual transport (stdio + HTTP/SSE) selected via
   `--transport=stdio|http`; v0.1.
 - `--allow-trading` opt-in, `--max-order-usd` notional cap, and
