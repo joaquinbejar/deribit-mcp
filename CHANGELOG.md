@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `DERIBIT_NETWORK=testnet|mainnet` env var as a readable
+  symbolic toggle for the upstream endpoint. Resolves to
+  `https://test.deribit.com` / `https://www.deribit.com`. Sits
+  between the `--testnet` / `--mainnet` CLI flags (highest
+  priority) and the existing `DERIBIT_ENDPOINT=<full URL>`
+  escape hatch — easier to flip from a docker-compose / k8s
+  config than the full URL form. Unrecognised values fall
+  through to the next resolution layer instead of silently
+  defaulting.
+- `Docker/` directory layout: `Dockerfile` and
+  `docker-compose.yml` moved here. The compose file now wires
+  `env_file: ../.env` so it can be invoked from the repo root
+  with `docker compose -f Docker/docker-compose.yml up`, drives
+  the network from `DERIBIT_NETWORK` (default `testnet`)
+  instead of a hardcoded `--testnet` flag, and ships a
+  commented-out `build:` block for local image builds.
+- `.env.example` documents the new `DERIBIT_NETWORK` knob.
+
 ## [1.0.0] - 2026-05-08
 
 ### Stability commitment

@@ -1,5 +1,16 @@
 # Reference docker-compose recipe for `deribit-mcp`.
 #
+# Lives under `Docker/` alongside `Dockerfile`. Run from the
+# repository root with:
+#
+#     docker compose -f Docker/docker-compose.yml up
+#
+# Build context is set to `..` so the Dockerfile's `COPY
+# Cargo.toml Cargo.lock ./` lines resolve against the project
+# root regardless of where compose is launched from. The published
+# image (`image:` below) is the default; uncomment the `build:`
+# block to compile locally instead.
+#
 # Operators can paste this file (and `.env`) into Portainer's
 # Stacks UI as-is. Bind the published port to `127.0.0.1` and front
 # the service with a TLS-terminating reverse proxy.
@@ -12,21 +23,37 @@
 services:
   deribit-mcp:
     image: ghcr.io/joaquinbejar/deribit-mcp:latest
+    # Uncomment to build locally from the repository root
+    # (context = `..`, Dockerfile = `Docker/Dockerfile`):
+    # build:
+    #   context: ..
+    #   dockerfile: Docker/Dockerfile
     container_name: deribit-mcp
     restart: unless-stopped
 
+    # Network selection lives in env (`DERIBIT_NETWORK`) instead
+    # of a hardcoded `--testnet` / `--mainnet` flag so operators
+    # can flip the same compose file across environments by
+    # editing `.env` (or the stack-level env in Portainer / Swarm)
+    # without touching the manifest. The CLI flags still win if
+    # both are set; see `Config::load`.
     command:
       - "--transport=http"
       - "--listen=0.0.0.0:8723"
-      - "--testnet"
 
+    # `.env` lives at the repo root next to `.env.example`. The
+    # path is resolved relative to this compose file, so step
+    # back into the project root.
     env_file:
-      - .env
+      - ../.env
 
     # Carry an extra optional secret from the host shell when the
     # operator wants to gate the `/mcp` endpoint with a static
     # bearer token (ADR-0004 — env-only, never a CLI flag).
     environment:
+      # `testnet` (default) | `mainnet`. Resolves to
+      # `https://test.deribit.com` / `https://www.deribit.com`.
+      DERIBIT_NETWORK: ${DERIBIT_NETWORK:-testnet}
       DERIBIT_HTTP_BEARER_TOKEN: ${DERIBIT_HTTP_BEARER_TOKEN:-}
       RUST_LOG: ${RUST_LOG:-info,deribit_mcp=debug}
 

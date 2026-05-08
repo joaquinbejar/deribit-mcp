@@ -69,6 +69,18 @@ pub enum OrderTransport {
     Fix,
 }
 
+/// Map a `DERIBIT_NETWORK=testnet|mainnet` value to the full
+/// endpoint URL. Returns `None` for unrecognised values so the
+/// caller falls through to the next resolution layer rather than
+/// silently picking the default.
+fn network_to_endpoint(value: &str) -> Option<String> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "testnet" | "test" => Some("https://test.deribit.com".to_string()),
+        "mainnet" | "main" | "production" | "prod" => Some("https://www.deribit.com".to_string()),
+        _ => None,
+    }
+}
+
 impl OrderTransport {
     /// Parse the user-facing string form (`http` / `fix`). Used by
     /// both the CLI parser and the env-var parser so the two stay
@@ -99,8 +111,21 @@ impl Config {
         }
 
         // Resolve each setting in priority order: CLI, env, default.
+        //
+        // Endpoint resolution layers, top wins:
+        //   1. `--testnet` / `--mainnet` CLI flags.
+        //   2. `DERIBIT_NETWORK=testnet|mainnet` — readable
+        //      symbolic toggle, useful for compose / k8s configs.
+        //   3. `DERIBIT_ENDPOINT=<full URL>` — escape hatch for
+        //      proxies and forks.
+        //   4. Default: testnet (ADR-0009).
         let endpoint = args
             .endpoint()
+            .or_else(|| {
+                std::env::var("DERIBIT_NETWORK")
+                    .ok()
+                    .and_then(|v| network_to_endpoint(&v))
+            })
             .or_else(|| std::env::var("DERIBIT_ENDPOINT").ok())
             .unwrap_or_else(|| "https://test.deribit.com".to_string());
 
@@ -346,6 +371,28 @@ mod tests {
     #[test]
     fn http_default_does_not_require_trading() {
         fix_requires_trading_guard(OrderTransport::Http, false).unwrap();
+    }
+
+    #[test]
+    fn network_env_var_resolves_to_endpoint() {
+        assert_eq!(
+            network_to_endpoint("testnet").as_deref(),
+            Some("https://test.deribit.com")
+        );
+        assert_eq!(
+            network_to_endpoint("MAINNET").as_deref(),
+            Some("https://www.deribit.com")
+        );
+        assert_eq!(
+            network_to_endpoint(" Test ").as_deref(),
+            Some("https://test.deribit.com")
+        );
+        assert_eq!(
+            network_to_endpoint("production").as_deref(),
+            Some("https://www.deribit.com")
+        );
+        assert_eq!(network_to_endpoint("staging"), None);
+        assert_eq!(network_to_endpoint(""), None);
     }
 
     #[test]
