@@ -181,12 +181,156 @@ async fn handle_place_order(ctx: &AdapterContext, input: Value) -> Result<Value,
     let input: PlaceOrderInput = parse(input)?;
     validate_place_order(&input)?;
     enforce_size_cap(ctx, &input.instrument_name, input.amount, input.price).await?;
+    // Closed-set match — adding a future `OrderTransport` variant
+    // fails to compile here, forcing reviewers to wire the new
+    // path explicitly.
+    match ctx.config.order_transport {
+        crate::config::OrderTransport::Http => place_order_via_http(ctx, input).await,
+        #[cfg(feature = "fix")]
+        crate::config::OrderTransport::Fix => place_order_via_fix(ctx, input).await,
+        #[cfg(not(feature = "fix"))]
+        crate::config::OrderTransport::Fix => Err(AdapterError::not_enabled(
+            "place_order",
+            "build with --features=fix",
+        )),
+    }
+}
+
+async fn place_order_via_http(
+    ctx: &AdapterContext,
+    input: PlaceOrderInput,
+) -> Result<Value, AdapterError> {
     let (side, request) = build_order_request(input)?;
     let result = match side {
         Side::Buy => ctx.http.buy_order(request).await?,
         Side::Sell => ctx.http.sell_order(request).await?,
     };
     Ok(serde_json::to_value(&result)?)
+}
+
+/// Submit `place_order` over the lazy FIX session.
+///
+/// The upstream `DeribitFixClient::send_order` returns only the
+/// FIX `ClOrdID` (string) — the inbound `ExecutionReport (8)`
+/// arrives asynchronously and is not surfaced synchronously by
+/// `deribit-fix 0.3`. To preserve the MCP wire surface — same
+/// `OrderResponse`-shape across both transports — the adapter
+/// builds a minimal stub: `{"order": {"order_id": <id>,
+/// "instrument_name": <…>, …}, "trades": []}`. The LLM should
+/// poll the Account tools for fill information when the trade
+/// list matters.
+#[cfg(feature = "fix")]
+async fn place_order_via_fix(
+    ctx: &AdapterContext,
+    input: PlaceOrderInput,
+) -> Result<Value, AdapterError> {
+    let request = build_fix_new_order_request(input)?;
+    let fix = ctx.ensure_fix().await?;
+    let order_id = {
+        let guard = fix.lock().await;
+        guard.send_order(request.clone()).await?
+    };
+    Ok(synthesize_fix_order_response(&order_id, &request))
+}
+
+#[cfg(feature = "fix")]
+fn build_fix_new_order_request(
+    input: PlaceOrderInput,
+) -> Result<deribit_fix::model::request::NewOrderRequest, AdapterError> {
+    use deribit_fix::model::request::{
+        NewOrderRequest, OrderSide as FixSide, OrderType as FixOrderType, TimeInForce as FixTif,
+        TriggerType as FixTrigger,
+    };
+
+    // `deribit-fix 0.3`'s `NewOrderRequest` does not carry an
+    // `mmp` field. Silently dropping the caller flag would make
+    // the FIX path quietly diverge from the HTTP path, so refuse
+    // up-front with a structured error.
+    if input.mmp.is_some() {
+        return Err(AdapterError::Validation {
+            field: "mmp".to_string(),
+            message: "`mmp` is not supported by the FIX transport (deribit-fix 0.3)".to_string(),
+        });
+    }
+
+    let order_type = match input.order_type {
+        PlaceOrderType::Limit => FixOrderType::Limit,
+        PlaceOrderType::Market => FixOrderType::Market,
+        PlaceOrderType::StopLimit => FixOrderType::StopLimit,
+        PlaceOrderType::StopMarket => FixOrderType::StopMarket,
+        PlaceOrderType::TakeLimit => FixOrderType::TakeLimit,
+        PlaceOrderType::TakeMarket => FixOrderType::TakeMarket,
+        PlaceOrderType::MarketLimit => FixOrderType::MarketLimit,
+    };
+    let side = match input.side {
+        Side::Buy => FixSide::Buy,
+        Side::Sell => FixSide::Sell,
+    };
+    let time_in_force = match input.time_in_force {
+        Some(PlaceTimeInForce::GoodTilCancelled) | None => FixTif::GoodTilCancelled,
+        Some(PlaceTimeInForce::GoodTilDay) => FixTif::GoodTilDay,
+        Some(PlaceTimeInForce::FillOrKill) => FixTif::FillOrKill,
+        Some(PlaceTimeInForce::ImmediateOrCancel) => FixTif::ImmediateOrCancel,
+    };
+    let trigger = input.trigger.map(|t| match t {
+        PlaceTrigger::IndexPrice => FixTrigger::IndexPrice,
+        PlaceTrigger::MarkPrice => FixTrigger::MarkPrice,
+        PlaceTrigger::LastPrice => FixTrigger::LastPrice,
+    });
+    let valid_until = match input.valid_until {
+        None => None,
+        Some(v) => Some(i64::try_from(v).map_err(|_| AdapterError::Validation {
+            field: "valid_until".to_string(),
+            message: format!("must fit in i64, got {v}"),
+        })?),
+    };
+    Ok(NewOrderRequest {
+        instrument_name: input.instrument_name,
+        amount: input.amount,
+        order_type,
+        side,
+        price: input.price,
+        time_in_force,
+        post_only: input.post_only,
+        reduce_only: input.reduce_only,
+        label: input.label,
+        stop_price: input.trigger_price,
+        trigger,
+        advanced: None,
+        max_show: None,
+        reject_post_only: input.reject_post_only,
+        valid_until,
+        client_order_id: None,
+    })
+}
+
+#[cfg(feature = "fix")]
+fn synthesize_fix_order_response(
+    order_id: &str,
+    request: &deribit_fix::model::request::NewOrderRequest,
+) -> Value {
+    use deribit_fix::model::request::OrderSide as FixSide;
+    let direction = match request.side {
+        FixSide::Buy => "buy",
+        FixSide::Sell => "sell",
+    };
+    serde_json::json!({
+        "order": {
+            "order_id": order_id,
+            "instrument_name": request.instrument_name,
+            "amount": request.amount,
+            "direction": direction,
+            "order_type": request.order_type.as_str(),
+            "price": request.price,
+            "post_only": request.post_only.unwrap_or(false),
+            "reduce_only": request.reduce_only.unwrap_or(false),
+            "label": request.label.clone().unwrap_or_default(),
+            "order_state": "open",
+            "time_in_force": request.time_in_force.as_str(),
+            "transport": "fix"
+        },
+        "trades": []
+    })
 }
 
 /// Enforce the per-process notional cap configured via
@@ -643,8 +787,35 @@ async fn handle_cancel_order(ctx: &AdapterContext, input: Value) -> Result<Value
             message: "must be non-empty".to_string(),
         });
     }
-    let result = ctx.http.cancel_order(order_id).await?;
-    Ok(serde_json::to_value(&result)?)
+    match ctx.config.order_transport {
+        crate::config::OrderTransport::Http => {
+            let result = ctx.http.cancel_order(order_id).await?;
+            Ok(serde_json::to_value(&result)?)
+        }
+        #[cfg(feature = "fix")]
+        crate::config::OrderTransport::Fix => {
+            let fix = ctx.ensure_fix().await?;
+            {
+                let guard = fix.lock().await;
+                guard.cancel_order(order_id.to_string()).await?;
+            }
+            // FIX `OrderCancelRequest (F)` returns ack via the
+            // inbound stream; the upstream wrapper resolves to `()`
+            // on success. Synthesize the same shape the HTTP path
+            // surfaces (`OrderInfoResponse`-style) so the LLM sees a
+            // consistent payload.
+            Ok(serde_json::json!({
+                "order_id": order_id,
+                "order_state": "cancelled",
+                "transport": "fix"
+            }))
+        }
+        #[cfg(not(feature = "fix"))]
+        crate::config::OrderTransport::Fix => Err(AdapterError::not_enabled(
+            "cancel_order",
+            "build with --features=fix",
+        )),
+    }
 }
 
 // ----- cancel_all_by_currency ---------------------------------------
@@ -689,6 +860,7 @@ async fn handle_cancel_all_by_currency(
             message: "must be non-empty".to_string(),
         });
     }
+    warn_if_fix_transport(ctx, "cancel_all_by_currency");
     let cancelled = ctx.http.cancel_all_by_currency(currency).await?;
     Ok(serde_json::json!({ "cancelled": cancelled }))
 }
@@ -735,8 +907,27 @@ async fn handle_cancel_all_by_instrument(
             message: "must be non-empty".to_string(),
         });
     }
+    warn_if_fix_transport(ctx, "cancel_all_by_instrument");
     let cancelled = ctx.http.cancel_all_by_instrument(instrument).await?;
     Ok(serde_json::json!({ "cancelled": cancelled }))
+}
+
+/// `cancel_all_*` always uses HTTP because the upstream
+/// `deribit-fix 0.3` does not expose an `OrderMassCancelRequest (q)`
+/// helper. Log at WARN when the dispatch deliberately bypasses the
+/// configured FIX transport so the operator notices.
+fn warn_if_fix_transport(ctx: &AdapterContext, tool: &str) {
+    match ctx.config.order_transport {
+        crate::config::OrderTransport::Http => {}
+        crate::config::OrderTransport::Fix => {
+            tracing::warn!(
+                tool,
+                "`{tool}` always dispatches through HTTP — `deribit-fix 0.3` has \
+                 no native mass-cancel helper. The active FIX session is unused \
+                 for this call."
+            );
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1008,5 +1199,95 @@ mod tests {
         assert!(
             matches!(err, AdapterError::Validation { ref field, .. } if field == "valid_until")
         );
+    }
+
+    #[cfg(feature = "fix")]
+    #[test]
+    fn build_fix_new_order_request_round_trips_buy_limit() {
+        use deribit_fix::model::request::{
+            OrderSide as FixSide, OrderType as FixOrderType, TimeInForce as FixTif,
+        };
+        let input = limit_input();
+        let request = build_fix_new_order_request(input).unwrap();
+        assert_eq!(request.instrument_name, "BTC-PERPETUAL");
+        assert!((request.amount - 10.0).abs() < 1e-9);
+        assert!(matches!(request.side, FixSide::Buy));
+        assert!(matches!(request.order_type, FixOrderType::Limit));
+        assert!(matches!(request.time_in_force, FixTif::GoodTilCancelled));
+        assert_eq!(request.price, Some(50_000.0));
+        assert_eq!(request.stop_price, None);
+        assert!(request.post_only.is_none());
+    }
+
+    #[cfg(feature = "fix")]
+    #[test]
+    fn build_fix_new_order_request_maps_stop_limit_with_trigger() {
+        use deribit_fix::model::request::{OrderType as FixOrderType, TriggerType as FixTrigger};
+        let mut input = limit_input();
+        input.order_type = PlaceOrderType::StopLimit;
+        input.trigger_price = Some(45_000.0);
+        input.trigger = Some(PlaceTrigger::MarkPrice);
+        let request = build_fix_new_order_request(input).unwrap();
+        assert!(matches!(request.order_type, FixOrderType::StopLimit));
+        assert_eq!(request.stop_price, Some(45_000.0));
+        assert!(matches!(request.trigger, Some(FixTrigger::MarkPrice)));
+    }
+
+    #[cfg(feature = "fix")]
+    #[test]
+    fn build_fix_new_order_request_overflow_rejects_valid_until() {
+        let mut input = limit_input();
+        input.valid_until = Some(u64::MAX);
+        let err = build_fix_new_order_request(input).unwrap_err();
+        assert!(
+            matches!(err, AdapterError::Validation { ref field, .. } if field == "valid_until")
+        );
+    }
+
+    #[cfg(feature = "fix")]
+    #[test]
+    fn build_fix_new_order_request_rejects_mmp() {
+        let mut input = limit_input();
+        input.mmp = Some(true);
+        let err = build_fix_new_order_request(input).unwrap_err();
+        assert!(matches!(err, AdapterError::Validation { ref field, .. } if field == "mmp"));
+    }
+
+    #[cfg(feature = "fix")]
+    #[test]
+    fn synthesize_fix_order_response_matches_documented_shape() {
+        use deribit_fix::model::request::{
+            NewOrderRequest, OrderSide as FixSide, OrderType as FixOrderType, TimeInForce as FixTif,
+        };
+        let request = NewOrderRequest {
+            instrument_name: "BTC-PERPETUAL".to_string(),
+            amount: 10.0,
+            order_type: FixOrderType::Limit,
+            side: FixSide::Buy,
+            price: Some(50_000.0),
+            time_in_force: FixTif::GoodTilCancelled,
+            post_only: Some(true),
+            reduce_only: None,
+            label: Some("test".to_string()),
+            stop_price: None,
+            trigger: None,
+            advanced: None,
+            max_show: None,
+            reject_post_only: None,
+            valid_until: None,
+            client_order_id: None,
+        };
+        let response = synthesize_fix_order_response("ORDER-1", &request);
+        assert_eq!(response["order"]["order_id"], "ORDER-1");
+        assert_eq!(response["order"]["instrument_name"], "BTC-PERPETUAL");
+        assert_eq!(response["order"]["direction"], "buy");
+        assert_eq!(response["order"]["order_type"], "limit");
+        assert_eq!(response["order"]["price"], 50_000.0);
+        assert_eq!(response["order"]["post_only"], true);
+        assert_eq!(response["order"]["reduce_only"], false);
+        assert_eq!(response["order"]["label"], "test");
+        assert_eq!(response["order"]["order_state"], "open");
+        assert_eq!(response["order"]["transport"], "fix");
+        assert_eq!(response["trades"], serde_json::json!([]));
     }
 }
