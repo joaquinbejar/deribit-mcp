@@ -273,16 +273,46 @@ cap.
 
 #### Curated prompts
 
-- `daily_options_summary` — "Invoke the `daily_options_summary`
-  prompt of the deribit MCP with `currency=BTC,
-  horizon_days=7`. Then run the three tools it lists and give
-  me the four-section summary."
-- `funding_snapshot` — "Invoke the `funding_snapshot` prompt
-  with `currency=BTC, lookback_hours=24`. Follow the
-  instructions and give me the table."
-- `position_review` — "Invoke the `position_review` prompt
-  with `currency=BTC, include_history=true`. Run the listed
-  Account tools and produce the report."
+MCP prompts are exposed as slash-commands in Claude Desktop —
+the user (not Claude) types them. Once the slash-command is
+expanded the curated message pair lands in the conversation
+and Claude follows the instructions, calling the tools the
+prompt names. The naming convention is
+`/mcp__<server>__<prompt>` (double underscores).
+
+- `daily_options_summary` — type
+  `/mcp__deribit__daily_options_summary` and supply
+  `currency=BTC`, `horizon_days=7`. Drives Claude through
+  `list_instruments`, `get_book_summary_by_currency`, and
+  `get_historical_volatility`, then produces a four-section
+  summary (ATM IV vs RV headline, top calls + puts by OI,
+  skew commentary, caveats).
+- `funding_snapshot` — type
+  `/mcp__deribit__funding_snapshot` and supply `currency=BTC`,
+  `lookback_hours=24`. Drives Claude through
+  `list_instruments` (perpetual filter) and
+  `get_funding_rate_history`, then produces a table (latest,
+  mean / median / p10 / p90, sign breakdown, outliers,
+  caveats).
+- `position_review` — type
+  `/mcp__deribit__position_review` and supply `currency=BTC`,
+  `include_history=true`. Drives Claude through
+  `get_account_summary`, `get_positions`,
+  `get_open_orders_by_currency`, and (when
+  `include_history=true`) `get_user_trades_by_currency`, then
+  produces a report (headline, positions, open orders, flags,
+  recent trades, caveats). When credentials are missing the
+  prompt returns a structured warning instead.
+
+If you want Claude to perform an equivalent workflow without
+invoking the slash-command, ask directly — for example: "Using
+deribit, summarize BTC options expiring in the next 7 days.
+Run `list_instruments` (kind=option), filter by
+`expiration_timestamp` within 7 days, then
+`get_book_summary_by_currency` and `get_historical_volatility`.
+Produce: ATM IV vs RV headline; top 3 calls and puts by open
+interest; skew commentary; caveats." That bypasses the
+curated prompt but reaches the same result.
 
 #### Negative paths (gating verification)
 
