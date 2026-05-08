@@ -331,6 +331,38 @@ impl From<deribit_fix::error::DeribitFixError> for AdapterError {
     }
 }
 
+#[cfg(test)]
+#[cfg(feature = "fix")]
+mod fix_wire_tests {
+    use super::*;
+
+    /// Pin the JSON wire shape of every documented [`FixErrorKind`]
+    /// variant so future renames force a deliberate review.
+    #[test]
+    fn fix_upstream_round_trips_through_serde() {
+        for (kind, expected_kind) in [
+            (FixErrorKind::Disconnected, "disconnected"),
+            (FixErrorKind::SessionReject, "session_reject"),
+            (FixErrorKind::Config, "config"),
+            (FixErrorKind::Other, "other"),
+        ] {
+            let err = AdapterError::Upstream {
+                inner: UpstreamErrorKind::Fix {
+                    kind,
+                    message: "boom".to_string(),
+                },
+            };
+            let value = serde_json::to_value(&err).expect("ser");
+            assert_eq!(value["kind"], "Upstream", "outer tag");
+            assert_eq!(value["inner"]["transport"], "fix");
+            assert_eq!(value["inner"]["kind"], expected_kind);
+            assert_eq!(value["inner"]["message"], "boom");
+            let round_trip: AdapterError = serde_json::from_value(value).expect("de");
+            assert_eq!(round_trip, err);
+        }
+    }
+}
+
 /// Parse an `"API error: <code> - <message>"` substring out of a
 /// `deribit-http` `RequestFailed` body. Returns `None` when the
 /// pattern is not found or the code does not parse as `i64`

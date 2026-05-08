@@ -98,16 +98,20 @@ deribit-http = { version = "0.7", default-features = false, features = ["native"
 # Declared for v0.1; live resources land in v0.3 (ADR-0006).
 deribit-websocket = { version = "0.3", default-features = false, features = ["rustls-aws-lc"] }
 # FIX 4.4 client used by Trading-tool dispatch when
-# `--order-transport=fix` is set (v0.6). Default-disabled below; the
-# adapter only ever talks to it via the lazy `OnceCell` in
-# `AdapterContext::fix`.
+# `--order-transport=fix` is set (v0.6). Optional, gated behind
+# the default-on `fix` feature below. The adapter only ever talks
+# to it via the lazy `OnceCell` in `AdapterContext::fix`.
 deribit-fix = { version = "0.3", default-features = false, optional = true }
 
 [features]
-# Default: FIX support compiled in. Disabling drops the
-# `deribit-fix` dep + the lazy session lifecycle in
-# `AdapterContext`. `--order-transport=fix` then surfaces a
-# `NotEnabled` startup error instead of a logon attempt.
+# Default: FIX support compiled in. The startup-time gating that
+# rejects `--order-transport=fix` without `--allow-trading` lives
+# in `Config::load` (v0.6-01); disabling this feature simply
+# removes the FIX wiring at compile time so a constrained build
+# still compiles. With `fix` disabled, `--order-transport=fix`
+# resolves the same `Config` field as before — the consumer-side
+# gating to refuse-to-start is added here when the v0.6-03
+# trading-tool dispatch lands.
 default = ["fix"]
 fix = ["dep:deribit-fix"]
 
