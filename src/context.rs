@@ -10,14 +10,22 @@
 
 use std::sync::Arc;
 
+#[cfg(feature = "fix")]
+use deribit_fix::DeribitFixClient;
+#[cfg(feature = "fix")]
+use deribit_fix::config::DeribitFixConfig;
 use deribit_http::config::credentials::ApiCredentials;
 use deribit_http::{DeribitHttpClient, HttpConfig};
 use deribit_websocket::client::DeribitWebSocketClient;
 use deribit_websocket::config::WebSocketConfig;
+#[cfg(feature = "fix")]
+use tokio::sync::Mutex;
 use tokio::sync::OnceCell;
 use url::Url;
 
 use crate::config::Config;
+#[cfg(feature = "fix")]
+use crate::config::OrderTransport;
 use crate::error::AdapterError;
 
 const TESTNET_WS_URL: &str = "wss://test.deribit.com/ws/api/v2";
@@ -29,7 +37,11 @@ const MAINNET_WS_URL: &str = "wss://www.deribit.com/ws/api/v2";
 /// upstream HTTP client is constructed eagerly so a misconfiguration
 /// surfaces at startup. The WebSocket client is lazy — most v0.1 tools
 /// are HTTP-only.
-#[derive(Debug)]
+///
+/// `Debug` is implemented manually below so the upstream
+/// `DeribitFixClient` (which does not derive `Debug`) doesn't leak
+/// into the bound; the FIX field is rendered as a redacted
+/// `<fix client>` placeholder.
 pub struct AdapterContext {
     /// Resolved configuration. Frozen for the lifetime of the process.
     pub config: Arc<Config>,
@@ -39,6 +51,32 @@ pub struct AdapterContext {
     /// Upstream WebSocket client. Built lazily on first
     /// `websocket()` access.
     ws: OnceCell<DeribitWebSocketClient>,
+    /// Upstream FIX 4.4 client. Built lazily on first
+    /// [`ensure_fix`](Self::ensure_fix) call when
+    /// `--order-transport=fix` is configured. Wrapped in a tokio
+    /// [`Mutex`] because [`deribit_fix::DeribitFixClient`] takes
+    /// `&mut self` for `connect` / `disconnect` / order operations.
+    #[cfg(feature = "fix")]
+    fix: OnceCell<Arc<Mutex<DeribitFixClient>>>,
+}
+
+impl std::fmt::Debug for AdapterContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut s = f.debug_struct("AdapterContext");
+        s.field("config", &self.config)
+            .field("http", &"<DeribitHttpClient>")
+            .field("ws", &self.ws);
+        #[cfg(feature = "fix")]
+        s.field(
+            "fix",
+            &if self.fix.initialized() {
+                "<fix client>"
+            } else {
+                "<not initialized>"
+            },
+        );
+        s.finish()
+    }
 }
 
 impl AdapterContext {
@@ -57,6 +95,8 @@ impl AdapterContext {
             config,
             http,
             ws: OnceCell::new(),
+            #[cfg(feature = "fix")]
+            fix: OnceCell::new(),
         })
     }
 
@@ -105,6 +145,69 @@ impl AdapterContext {
             })
             .await
             .map_err(AdapterError::from)
+    }
+
+    /// Lazily construct, log on, and return a shared handle to the
+    /// FIX 4.4 client.
+    ///
+    /// First call drives `DeribitFixClient::new` + `connect()`,
+    /// which performs the FIX `Logon (A)` and starts the heartbeat
+    /// task. Subsequent calls return the same `Arc<Mutex<…>>` so
+    /// callers reuse a single session across the process lifetime.
+    /// SIGTERM should drive [`shutdown_fix`](Self::shutdown_fix) so
+    /// the session ends with a proper FIX `Logout (5)`.
+    ///
+    /// # Errors
+    ///
+    /// - [`AdapterError::Validation`] with `field = "order_transport"`
+    ///   when the configuration does not select the FIX transport
+    ///   (`OrderTransport::Http`); calling `ensure_fix` in that
+    ///   state is a programmer error.
+    /// - [`AdapterError::Auth`] with the upstream FIX rejection
+    ///   reason when `Logon (A)` is rejected.
+    /// - [`AdapterError::Upstream`] with [`UpstreamErrorKind::Fix`]
+    ///   for transport, session, config, and protocol errors.
+    ///
+    /// [`UpstreamErrorKind::Fix`]: crate::error::UpstreamErrorKind::Fix
+    #[cfg(feature = "fix")]
+    pub async fn ensure_fix(&self) -> Result<Arc<Mutex<DeribitFixClient>>, AdapterError> {
+        match self.config.order_transport {
+            OrderTransport::Fix => {}
+            OrderTransport::Http => {
+                return Err(AdapterError::validation(
+                    "order_transport",
+                    "ensure_fix called but configured order_transport is `http`",
+                ));
+            }
+        }
+        let handle = self
+            .fix
+            .get_or_try_init(|| async {
+                let cfg = fix_config_from(&self.config)?;
+                let mut client = DeribitFixClient::new(&cfg).await?;
+                client.connect().await?;
+                Ok::<_, AdapterError>(Arc::new(Mutex::new(client)))
+            })
+            .await?;
+        Ok(handle.clone())
+    }
+
+    /// Issue a FIX `Logout (5)` and tear down the session, if one
+    /// has been established. No-op when the FIX session was never
+    /// opened. Called from the SIGTERM handler at process shutdown.
+    ///
+    /// # Errors
+    ///
+    /// Surfaces any [`AdapterError`] that the upstream
+    /// `disconnect` call produces. Best-effort — callers should
+    /// log the error rather than abort the shutdown.
+    #[cfg(feature = "fix")]
+    pub async fn shutdown_fix(&self) -> Result<(), AdapterError> {
+        if let Some(handle) = self.fix.get() {
+            let mut guard = handle.lock().await;
+            guard.disconnect().await?;
+        }
+        Ok(())
     }
 }
 
@@ -172,6 +275,38 @@ fn endpoint_is_mainnet(endpoint: &str) -> bool {
     Url::parse(endpoint).ok().is_some_and(|u| is_mainnet(&u))
 }
 
+/// Build the upstream `DeribitFixConfig` from our resolved `Config`.
+///
+/// `client_id` becomes the FIX `Username` field; `client_secret`
+/// is the password material the upstream library uses to sign the
+/// logon (HMAC-SHA-256 with timestamp + nonce, per the Deribit
+/// FIX spec). The host / port pair is picked by environment:
+/// testnet → `fix-test.deribit.com:9881`, mainnet →
+/// `fix.deribit.com:9881`.
+#[cfg(feature = "fix")]
+fn fix_config_from(config: &Config) -> Result<DeribitFixConfig, AdapterError> {
+    let (Some(client_id), Some(client_secret)) =
+        (config.client_id.as_ref(), config.client_secret.as_ref())
+    else {
+        return Err(AdapterError::validation(
+            "credentials",
+            "FIX transport requires DERIBIT_CLIENT_ID + DERIBIT_CLIENT_SECRET",
+        ));
+    };
+    let mainnet = endpoint_is_mainnet(&config.endpoint);
+    let (host, port) = if mainnet {
+        ("fix.deribit.com", 9881_u16)
+    } else {
+        ("fix-test.deribit.com", 9881_u16)
+    };
+    let mut fix_cfg =
+        DeribitFixConfig::new().with_credentials(client_id.clone(), client_secret.clone());
+    fix_cfg.host = host.to_string();
+    fix_cfg.port = port;
+    fix_cfg.use_ssl = false;
+    Ok(fix_cfg)
+}
+
 fn is_mainnet(url: &Url) -> bool {
     matches!(url.host_str(), Some(host) if host == "www.deribit.com" || host == "deribit.com")
 }
@@ -195,6 +330,53 @@ mod tests {
             log_format: LogFormat::Text,
             order_transport: OrderTransport::Http,
         }
+    }
+
+    #[cfg(feature = "fix")]
+    #[tokio::test]
+    async fn ensure_fix_when_transport_is_http_returns_validation() {
+        // Default `cfg(...)` builds with `OrderTransport::Http`. The
+        // ensure_fix call must short-circuit with a structured
+        // Validation error rather than attempt a network connect.
+        let ctx =
+            AdapterContext::new(Arc::new(cfg("https://test.deribit.com", true))).expect("ctx");
+        // `Arc<Mutex<DeribitFixClient>>` doesn't derive `Debug`, so
+        // we destructure the result manually instead of going
+        // through `unwrap_err`.
+        match ctx.ensure_fix().await {
+            Ok(_) => panic!("expected Validation error, got Ok"),
+            Err(AdapterError::Validation { field, .. }) => {
+                assert_eq!(field, "order_transport");
+            }
+            Err(other) => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[cfg(feature = "fix")]
+    #[tokio::test]
+    async fn ensure_fix_without_credentials_returns_validation() {
+        // Configure the FIX transport but with no creds; the
+        // upstream `DeribitFixClient::new` would otherwise be
+        // exercised. Adapter rejects up-front.
+        let mut config = cfg("https://test.deribit.com", false);
+        config.order_transport = OrderTransport::Fix;
+        config.allow_trading = true;
+        let ctx = AdapterContext::new(Arc::new(config)).expect("ctx");
+        match ctx.ensure_fix().await {
+            Ok(_) => panic!("expected Validation error, got Ok"),
+            Err(AdapterError::Validation { field, .. }) => {
+                assert_eq!(field, "credentials");
+            }
+            Err(other) => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[cfg(feature = "fix")]
+    #[tokio::test]
+    async fn shutdown_fix_when_never_opened_is_noop() {
+        let ctx =
+            AdapterContext::new(Arc::new(cfg("https://test.deribit.com", true))).expect("ctx");
+        ctx.shutdown_fix().await.expect("noop ok");
     }
 
     #[test]
