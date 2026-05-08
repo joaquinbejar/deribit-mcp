@@ -9,6 +9,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Trading-tool dispatch routing (v0.6-03):
+  - `handle_place_order` and `handle_cancel_order` now branch on
+    `ctx.config.order_transport` with an exhaustive match. With
+    `--order-transport=http` the existing v0.4 path runs
+    unchanged; with `--order-transport=fix` the calls go through
+    the lazy `AdapterContext::ensure_fix()` session.
+  - `place_order_via_fix` builds a
+    `deribit_fix::model::request::NewOrderRequest` from the same
+    `PlaceOrderInput`, drives `DeribitFixClient::send_order`,
+    and synthesizes a minimal MCP `OrderResponse`-shaped JSON
+    (`{"order": {...}, "trades": []}`) so the wire surface is
+    identical across both transports. The synthesized payload
+    carries a `"transport": "fix"` marker so the LLM can tell
+    where the response came from.
+  - `cancel_order` over FIX dispatches
+    `DeribitFixClient::cancel_order(order_id)` and returns
+    `{"order_id": <id>, "order_state": "cancelled", "transport":
+    "fix"}` — `deribit-fix 0.3` resolves `cancel_order` to
+    `()` so the adapter assembles the response shape.
+  - `cancel_all_by_currency` and `cancel_all_by_instrument`
+    intentionally always dispatch through HTTP. When the
+    configured transport is `Fix` the adapter logs at WARN that
+    the active FIX session was bypassed; `deribit-fix 0.3` does
+    not expose a mass-cancel helper.
+  - Schema snapshots are byte-identical between
+    `--order-transport=http` and `--order-transport=fix` runs;
+    the MCP tool surface is unchanged.
+  - Tests:
+    `build_fix_new_order_request_round_trips_buy_limit`,
+    `build_fix_new_order_request_maps_stop_limit_with_trigger`,
+    `build_fix_new_order_request_overflow_rejects_valid_until`,
+    `synthesize_fix_order_response_matches_documented_shape`.
+
 - FIX session lifecycle in the adapter (v0.6-02):
   - New `deribit-fix = "0.3"` dependency, gated behind a default-on
     `fix` Cargo feature. Disabling the feature drops the FIX wiring
