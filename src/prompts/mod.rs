@@ -87,7 +87,7 @@ impl PromptRegistry {
     /// Populates:
     ///
     /// - `daily_options_summary` (v0.5-02).
-    /// - `funding_snapshot` (v0.5-03 — pending).
+    /// - `funding_snapshot` (v0.5-03).
     /// - `position_review` (v0.5-04 — pending).
     #[must_use]
     pub fn build(_ctx: &AdapterContext) -> Self {
@@ -194,6 +194,7 @@ mod tests {
     fn build_populates_v05_prompts() {
         let registry = PromptRegistry::build(&ctx());
         assert!(registry.contains("daily_options_summary"));
+        assert!(registry.contains("funding_snapshot"));
     }
 
     #[tokio::test]

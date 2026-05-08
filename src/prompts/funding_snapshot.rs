@@ -209,4 +209,14 @@ mod tests {
             matches!(err, AdapterError::Validation { ref field, .. } if field == "lookback_hours")
         );
     }
+
+    #[test]
+    fn descriptor_matches_documented_name_and_args() {
+        let d = descriptor();
+        assert_eq!(d.name, NAME);
+        let args = d.arguments.expect("arguments");
+        let names: Vec<_> = args.iter().map(|a| a.name.as_str()).collect();
+        assert_eq!(names, vec!["currency", "lookback_hours"]);
+        assert!(args.iter().all(|a| a.required == Some(true)));
+    }
 }
