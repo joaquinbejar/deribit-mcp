@@ -9,6 +9,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- FIX session lifecycle in the adapter (v0.6-02):
+  - New `deribit-fix = "0.3"` dependency, gated behind a default-on
+    `fix` Cargo feature. Disabling the feature drops the FIX wiring
+    entirely so a constrained build still compiles.
+  - `AdapterContext::fix: OnceCell<Arc<Mutex<DeribitFixClient>>>`
+    — lazy. Constructed on first `ensure_fix()` call.
+  - `AdapterContext::ensure_fix()` short-circuits with a
+    structured `AdapterError::Validation { field:
+    "order_transport" }` when the configuration selects `Http`,
+    and with `field: "credentials"` when no client_id /
+    client_secret are configured. Otherwise it builds the
+    upstream `DeribitFixConfig` (host = `fix-test.deribit.com`
+    on testnet / `fix.deribit.com` on mainnet, port `9881`,
+    plain TCP), drives `DeribitFixClient::new` +
+    `client.connect()` (FIX `Logon (A)` + heartbeat task), and
+    returns the shared handle.
+  - `AdapterContext::shutdown_fix()` is the SIGTERM-side hook —
+    no-op when the session was never opened, otherwise issues a
+    proper FIX `Logout (5)` via the upstream `disconnect`. Wired
+    into `main()` after both the stdio and HTTP branches return.
+  - Manual `Debug` impl for `AdapterContext` so the upstream
+    `DeribitFixClient` (which does not derive `Debug`) doesn't
+    leak into the bound; the FIX field is rendered as a redacted
+    `<fix client>` placeholder.
+  - New `From<deribit_fix::error::DeribitFixError> for
+    AdapterError` mapping with an exhaustive match on the
+    upstream enum:
+    - `Authentication` → `AdapterError::Auth { reason }` (via
+      the existing `classify_auth_failure_reason`).
+    - `Connection` / `Io` → `UpstreamErrorKind::Fix { kind:
+      Disconnected, message }`.
+    - `Session` / `Protocol` / `MessageParsing` /
+      `MessageConstruction` → `Fix { kind: SessionReject }`.
+    - `Config` → `Fix { kind: Config }`.
+    - `Timeout` / `Generic` / `Json` / `Http` → `Fix { kind:
+      Other }`.
+  - New `UpstreamErrorKind::Fix` variant + `FixErrorKind` enum
+    (`Disconnected`, `SessionReject`, `Config`, `Other`) — both
+    behind `cfg(feature = "fix")`.
+  - Tests:
+    `ensure_fix_when_transport_is_http_returns_validation`,
+    `ensure_fix_without_credentials_returns_validation`,
+    `shutdown_fix_when_never_opened_is_noop`.
+
 - `--order-transport=http|fix` CLI flag + config plumbing
   (v0.6-01):
   - New `Config::order_transport: OrderTransport` field with

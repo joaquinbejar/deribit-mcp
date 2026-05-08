@@ -97,6 +97,19 @@ deribit-base = "0.3"
 deribit-http = { version = "0.7", default-features = false, features = ["native"] }
 # Declared for v0.1; live resources land in v0.3 (ADR-0006).
 deribit-websocket = { version = "0.3", default-features = false, features = ["rustls-aws-lc"] }
+# FIX 4.4 client used by Trading-tool dispatch when
+# `--order-transport=fix` is set (v0.6). Default-disabled below; the
+# adapter only ever talks to it via the lazy `OnceCell` in
+# `AdapterContext::fix`.
+deribit-fix = { version = "0.3", default-features = false, optional = true }
+
+[features]
+# Default: FIX support compiled in. Disabling drops the
+# `deribit-fix` dep + the lazy session lifecycle in
+# `AdapterContext`. `--order-transport=fix` then surfaces a
+# `NotEnabled` startup error instead of a logon attempt.
+default = ["fix"]
+fix = ["dep:deribit-fix"]
 
 [dev-dependencies]
 tokio = { version = "1", features = ["test-util"] }

@@ -117,10 +117,17 @@ async fn run() -> Result<()> {
             );
 
             let cfg = Arc::new(config);
-            http_transport::serve(cfg, ctx, shutdown)
+            http_transport::serve(cfg, ctx.clone(), shutdown)
                 .await
                 .context("HTTP transport")?;
         }
+    }
+
+    // Best-effort FIX `Logout (5)` — only fires when the v0.6 FIX
+    // session was actually opened by a Trading-tool dispatch.
+    #[cfg(feature = "fix")]
+    if let Err(err) = ctx.shutdown_fix().await {
+        tracing::warn!(error = %err, "fix shutdown failed");
     }
 
     Ok(())

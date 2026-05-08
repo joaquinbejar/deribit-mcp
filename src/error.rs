@@ -167,6 +167,43 @@ pub enum UpstreamErrorKind {
         /// Short description; safe for the wire.
         message: String,
     },
+    /// FIX 4.4 transport error (v0.6+).
+    ///
+    /// Surfaces FIX-side failures classified by [`FixErrorKind`]. The
+    /// adapter maps every `deribit_fix::DeribitFixError` variant into
+    /// one of those structured kinds via an exhaustive match —
+    /// adding a new upstream variant fails to compile until the
+    /// mapping is revisited.
+    #[cfg(feature = "fix")]
+    Fix {
+        /// Closed-set classification of the FIX failure.
+        kind: FixErrorKind,
+        /// Short description; safe for the wire.
+        message: String,
+    },
+}
+
+/// FIX-side failure classification surfaced via
+/// [`UpstreamErrorKind::Fix`].
+#[cfg(feature = "fix")]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FixErrorKind {
+    /// FIX session was disconnected (TCP drop, peer logout, etc).
+    Disconnected,
+    /// Logon was refused by the peer with a structured FIX
+    /// `BusinessMessageReject (j)` or `Reject (3)` reason. The
+    /// adapter surfaces this as a `SessionReject` so the LLM can
+    /// distinguish protocol-level rejection from a generic
+    /// disconnect.
+    SessionReject,
+    /// The FIX configuration was rejected at construction time
+    /// (e.g. missing username / endpoint).
+    Config,
+    /// Catch-all for protocol / parsing / I/O / timeout failures
+    /// that don't fit the categories above. Carries the original
+    /// upstream message in the parent payload's `message` field.
+    Other,
 }
 
 impl AdapterError {
@@ -230,6 +267,66 @@ impl From<HttpError> for AdapterError {
             HttpError::ConfigError(_) => {
                 AdapterError::internal("upstream HTTP client misconfigured")
             }
+        }
+    }
+}
+
+#[cfg(feature = "fix")]
+impl From<deribit_fix::error::DeribitFixError> for AdapterError {
+    fn from(err: deribit_fix::error::DeribitFixError) -> Self {
+        use deribit_fix::error::DeribitFixError as Fx;
+        // Exhaustive match on the upstream enum: adding a new
+        // upstream variant fails to compile here, forcing a
+        // reviewer to decide on its mapping.
+        match err {
+            Fx::Authentication(message) => AdapterError::Auth {
+                reason: classify_auth_failure_reason(&message),
+            },
+            Fx::Connection(message) => AdapterError::Upstream {
+                inner: UpstreamErrorKind::Fix {
+                    kind: FixErrorKind::Disconnected,
+                    message,
+                },
+            },
+            Fx::Io(io) => AdapterError::Upstream {
+                inner: UpstreamErrorKind::Fix {
+                    kind: FixErrorKind::Disconnected,
+                    message: io.to_string(),
+                },
+            },
+            Fx::Session(message)
+            | Fx::Protocol(message)
+            | Fx::MessageParsing(message)
+            | Fx::MessageConstruction(message) => AdapterError::Upstream {
+                inner: UpstreamErrorKind::Fix {
+                    kind: FixErrorKind::SessionReject,
+                    message,
+                },
+            },
+            Fx::Config(message) => AdapterError::Upstream {
+                inner: UpstreamErrorKind::Fix {
+                    kind: FixErrorKind::Config,
+                    message,
+                },
+            },
+            Fx::Timeout(message) | Fx::Generic(message) => AdapterError::Upstream {
+                inner: UpstreamErrorKind::Fix {
+                    kind: FixErrorKind::Other,
+                    message,
+                },
+            },
+            Fx::Json(json) => AdapterError::Upstream {
+                inner: UpstreamErrorKind::Fix {
+                    kind: FixErrorKind::Other,
+                    message: json.to_string(),
+                },
+            },
+            Fx::Http(http) => AdapterError::Upstream {
+                inner: UpstreamErrorKind::Fix {
+                    kind: FixErrorKind::Other,
+                    message: http.to_string(),
+                },
+            },
         }
     }
 }
