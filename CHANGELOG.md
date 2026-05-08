@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-05-08
+
+### Stability commitment
+
+Promotion of the 0.x line to a stable 1.0 release. Closes
+v1.0-01 (#46). The MCP wire surface — tool / resource / prompt
+catalogue, every input + output struct, the `AdapterError` JSON
+shape, and the resource URI templates — is now under the
+SemVer guarantee: any future change that would alter a
+documented field, rename a closed-set enum variant, **add a new
+variant to a closed-set enum that is not `#[non_exhaustive]`**,
+or remove an existing tool / resource / prompt requires a 2.0
+major bump. `ToolClass` is the only enum on the public surface
+marked `#[non_exhaustive]` today; adding new families there is
+explicitly forward-compatible.
+
+The schema snapshots committed under `tests/snapshots/` are the
+binding wire-shape contract. CI runs the full suite on every
+PR; an unreviewed snapshot diff fails the build.
+
+### Recap of the 0.x → 1.0 surface (cumulative)
+
+- 14 `Read` tools (public market data; v0.1).
+- 10 `Account` tools (authenticated read; v0.2).
+- 5 `Trading` tools (`place_order`, `edit_order`, `cancel_order`,
+  `cancel_all_by_currency`, `cancel_all_by_instrument`; v0.4).
+- 1 static `Read` resource (`deribit://currencies`) plus 4
+  templates (`instruments`, `book`, `ticker`, `trades`; v0.1).
+- 3 live resource families wired through a refcounted
+  `LiveRegistry` over `deribit-websocket` (v0.3).
+- 3 curated MCP prompts (`daily_options_summary`,
+  `funding_snapshot`, `position_review`) on top of the
+  `prompts` capability skeleton in v0.5-01..04.
+- Dual transport (stdio + HTTP/SSE) selected via
+  `--transport=stdio|http`; v0.1.
+- `--allow-trading` opt-in, `--max-order-usd` notional cap, and
+  `--order-transport=http|fix` (v0.4 + v0.6).
+- `AdapterError` closed-set: `Auth`, `RateLimited`, `Upstream`,
+  `Validation`, `SizeCapExceeded`, `NotEnabled`, `Internal`.
+  `UpstreamErrorKind`: `Api`, `Network`, `Http`, `Websocket`,
+  `Fix` (v0.6).
+
 ### Added
 
 - Trading-tool dispatch routing (v0.6-03):
