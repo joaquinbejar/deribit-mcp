@@ -353,10 +353,13 @@ mod fix_wire_tests {
                 },
             };
             let value = serde_json::to_value(&err).expect("ser");
+            // The `Upstream` variant carries its payload under
+            // `source` because the field is `#[serde(rename = "source")]`
+            // — see `AdapterError::Upstream`.
             assert_eq!(value["kind"], "Upstream", "outer tag");
-            assert_eq!(value["inner"]["transport"], "fix");
-            assert_eq!(value["inner"]["kind"], expected_kind);
-            assert_eq!(value["inner"]["message"], "boom");
+            assert_eq!(value["source"]["transport"], "fix");
+            assert_eq!(value["source"]["kind"], expected_kind);
+            assert_eq!(value["source"]["message"], "boom");
             let round_trip: AdapterError = serde_json::from_value(value).expect("de");
             assert_eq!(round_trip, err);
         }
