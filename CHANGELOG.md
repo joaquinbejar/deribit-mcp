@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `funding_snapshot` MCP prompt (v0.5-03):
+  - Curated User + Assistant message pair that walks the LLM
+    through assembling a current + historical perpetual
+    funding-rate snapshot. Names `list_instruments` (filtered
+    to `kind: "future"`, `expired: false`) and
+    `get_funding_rate_history` and pins the output sections
+    (latest, mean / median / p10 / p90, sign breakdown,
+    outliers, caveats).
+  - Arguments: `currency` (`BTC` / `ETH`, case-normalised),
+    `lookback_hours: u32` in `1..=720` (30 days).
+  - Trading schema snapshot extended with the new descriptor;
+    integration test
+    `prompts_get_funding_snapshot_returns_well_formed_messages`
+    asserts the body references `BTC-PERPETUAL` and
+    `get_funding_rate_history`.
+
 - `daily_options_summary` MCP prompt (v0.5-02):
   - Curated User + Assistant message pair that walks the LLM
     through "summarise BTC / ETH options expiring in the next N

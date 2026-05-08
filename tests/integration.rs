@@ -1262,3 +1262,25 @@ async fn prompts_get_daily_options_summary_rejects_invalid_currency() {
         other => panic!("unexpected: {other:?}"),
     }
 }
+
+#[tokio::test]
+async fn prompts_get_funding_snapshot_returns_well_formed_messages() {
+    use deribit_mcp::PromptRegistry;
+    use serde_json::Map;
+    let ctx = ctx_with_mock("http://127.0.0.1:0/");
+    let registry = PromptRegistry::build(&ctx);
+    assert!(registry.contains("funding_snapshot"));
+    let mut args = Map::new();
+    args.insert("currency".into(), serde_json::Value::String("BTC".into()));
+    args.insert("lookback_hours".into(), serde_json::Value::from(24_u32));
+    let result = registry
+        .get(&ctx, "funding_snapshot", args)
+        .await
+        .expect("ok");
+    assert_eq!(result.messages.len(), 2);
+    let serialised = serde_json::to_value(&result).expect("ser");
+    let messages = serialised["messages"].as_array().expect("messages");
+    let user_text = messages[0]["content"]["text"].as_str().expect("text");
+    assert!(user_text.contains("BTC-PERPETUAL"));
+    assert!(user_text.contains("get_funding_rate_history"));
+}
