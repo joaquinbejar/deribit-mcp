@@ -13,8 +13,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (v0.6-01):
   - New `Config::order_transport: OrderTransport` field with
     `Http` (default — v0.1..v0.5 behaviour) and `Fix` variants.
-    Closed-set match on the enum keeps every consumer
-    exhaustive.
+    The startup guard uses an exhaustive `match` so adding a
+    future variant fails to compile until the gating is
+    revisited.
   - CLI: `--order-transport=http|fix`.
   - Env: `DERIBIT_ORDER_TRANSPORT=http|fix`.
   - Resolution: CLI > env > default `Http`.

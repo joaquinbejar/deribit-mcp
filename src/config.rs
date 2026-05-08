@@ -159,16 +159,19 @@ impl Config {
             })
             .unwrap_or(OrderTransport::Http);
 
-        // Closed-set match — adding a new variant to `OrderTransport`
-        // would force this guard to be revisited.
-        if let OrderTransport::Fix = order_transport
-            && !allow_trading
-        {
-            anyhow::bail!(
-                "`--order-transport=fix` (or DERIBIT_ORDER_TRANSPORT=fix) requires \
-                 `--allow-trading` (or DERIBIT_ALLOW_TRADING=1) — without trading \
-                 the FIX session would never be reached"
-            );
+        // Exhaustive match — the compiler refuses to compile this
+        // block once a new `OrderTransport` variant is added, forcing
+        // a reviewer to decide whether the new transport needs the
+        // same gating.
+        match order_transport {
+            OrderTransport::Fix if !allow_trading => {
+                anyhow::bail!(
+                    "`--order-transport=fix` (or DERIBIT_ORDER_TRANSPORT=fix) requires \
+                     `--allow-trading` (or DERIBIT_ALLOW_TRADING=1) — without trading \
+                     the FIX session would never be reached"
+                );
+            }
+            OrderTransport::Fix | OrderTransport::Http => {}
         }
 
         #[allow(clippy::unnecessary_lazy_evaluations)]
@@ -315,20 +318,19 @@ mod tests {
     /// Reproduce the `OrderTransport::Fix` requires-trading guard
     /// from `Config::load` directly: the guard runs against locally
     /// resolved values so it can be exercised without
-    /// `Config::load`'s CLI-arg path. Lets us verify the
-    /// closed-set match in isolation.
+    /// `Config::load`'s CLI-arg path. Mirrors the production
+    /// `match` so adding a new `OrderTransport` variant fails to
+    /// compile in both places.
     fn fix_requires_trading_guard(
         order_transport: OrderTransport,
         allow_trading: bool,
     ) -> Result<(), &'static str> {
-        if let OrderTransport::Fix = order_transport
-            && !allow_trading
-        {
-            return Err(
+        match order_transport {
+            OrderTransport::Fix if !allow_trading => Err(
                 "`--order-transport=fix` (or DERIBIT_ORDER_TRANSPORT=fix) requires `--allow-trading`",
-            );
+            ),
+            OrderTransport::Fix | OrderTransport::Http => Ok(()),
         }
-        Ok(())
     }
 
     #[test]
