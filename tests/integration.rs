@@ -1180,12 +1180,19 @@ async fn cancel_all_by_currency_zero_count_returns_zero() {
 }
 
 #[tokio::test]
-async fn prompts_list_returns_empty_for_baseline_registry() {
+async fn prompts_list_for_built_registry_includes_daily_options_summary() {
+    // `PromptRegistry::build` populates whichever prompts are
+    // shipped — at v0.5-02 that's `daily_options_summary`. The
+    // empty-registry path is exercised by the lib-level
+    // `unknown_prompt_returns_validation` unit test against
+    // `PromptRegistry::new`.
     use deribit_mcp::PromptRegistry;
     let ctx = ctx_with_mock("http://127.0.0.1:0/");
     let registry = PromptRegistry::build(&ctx);
-    assert!(registry.is_empty());
-    assert_eq!(registry.list().len(), 0);
+    assert!(registry.contains("daily_options_summary"));
+    let names: std::collections::HashSet<String> =
+        registry.list().into_iter().map(|p| p.name).collect();
+    assert!(names.contains("daily_options_summary"));
 }
 
 #[tokio::test]
