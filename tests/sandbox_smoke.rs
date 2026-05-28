@@ -122,6 +122,7 @@ async fn live_testnet_account_smoke() {
         transport: Transport::Stdio,
         http_listen: "127.0.0.1:8723".parse().expect("default listen"),
         http_bearer_token: None,
+        allowed_hosts: Vec::new(),
         log_format: LogFormat::Text,
         order_transport: OrderTransport::Http,
     };
@@ -214,6 +215,7 @@ async fn live_testnet_trading_smoke() {
         transport: Transport::Stdio,
         http_listen: "127.0.0.1:8723".parse().expect("default listen"),
         http_bearer_token: None,
+        allowed_hosts: Vec::new(),
         log_format: LogFormat::Text,
         order_transport: OrderTransport::Http,
     };

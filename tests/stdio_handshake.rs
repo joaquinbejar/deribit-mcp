@@ -27,6 +27,7 @@ fn test_config() -> Config {
         transport: Transport::Stdio,
         http_listen: "127.0.0.1:8723".parse().unwrap(),
         http_bearer_token: None,
+        allowed_hosts: Vec::new(),
         log_format: LogFormat::Text,
         order_transport: OrderTransport::Http,
     }

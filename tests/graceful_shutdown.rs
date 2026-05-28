@@ -25,6 +25,7 @@ fn cfg(listen: std::net::SocketAddr) -> Config {
         transport: Transport::Http,
         http_listen: listen,
         http_bearer_token: None,
+        allowed_hosts: Vec::new(),
         log_format: LogFormat::Json,
         order_transport: OrderTransport::Http,
     }

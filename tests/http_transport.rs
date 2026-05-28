@@ -34,6 +34,7 @@ fn cfg(listen: std::net::SocketAddr, bearer: Option<&str>) -> Config {
         transport: Transport::Http,
         http_listen: listen,
         http_bearer_token: bearer.map(str::to_string),
+        allowed_hosts: Vec::new(),
         log_format: LogFormat::Json,
         order_transport: OrderTransport::Http,
     }
