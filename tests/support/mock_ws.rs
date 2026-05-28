@@ -142,10 +142,10 @@ impl Drop for MockWsServer {
     fn drop(&mut self) {
         self.cancel.cancel();
         // Best-effort wait; tests should not block on this.
-        if let Ok(mut guard) = self.accept_handle.try_lock() {
-            if let Some(handle) = guard.take() {
-                handle.abort();
-            }
+        if let Ok(mut guard) = self.accept_handle.try_lock()
+            && let Some(handle) = guard.take()
+        {
+            handle.abort();
         }
     }
 }

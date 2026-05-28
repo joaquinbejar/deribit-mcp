@@ -124,10 +124,8 @@ impl Drop for SubscriptionHandle {
                 let still_zero = map
                     .get(&uri)
                     .is_some_and(|e| e.refcount.load(Ordering::Acquire) == 0);
-                if still_zero {
-                    if let Some(entry) = map.remove(&uri) {
-                        entry.cancel.cancel();
-                    }
+                if still_zero && let Some(entry) = map.remove(&uri) {
+                    entry.cancel.cancel();
                 }
             });
         }
@@ -295,10 +293,10 @@ impl LiveRegistry {
         // mid-flight but the deferred map cleanup hasn't run yet)
         // does not count — we'd otherwise hand out a handle to a
         // dead reader task. Treat as absent and fall through.
-        if let Some(entry) = self.inner.entries.read().await.get(uri).cloned() {
-            if !entry.cancel.is_cancelled() {
-                return Ok(self.attach(uri.clone(), entry));
-            }
+        if let Some(entry) = self.inner.entries.read().await.get(uri).cloned()
+            && !entry.cancel.is_cancelled()
+        {
+            return Ok(self.attach(uri.clone(), entry));
         }
 
         // Slow path: open the upstream stream first, then publish
