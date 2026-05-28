@@ -41,12 +41,6 @@ services:
       - "--transport=http"
       - "--listen=0.0.0.0:8723"
 
-    # `.env` lives at the repo root next to `.env.example`. The
-    # path is resolved relative to this compose file, so step
-    # back into the project root.
-    env_file:
-      - ../.env
-
     # Carry an extra optional secret from the host shell when the
     # operator wants to gate the `/mcp` endpoint with a static
     # bearer token (ADR-0004 — env-only, never a CLI flag).
@@ -56,6 +50,8 @@ services:
       DERIBIT_NETWORK: ${DERIBIT_NETWORK:-testnet}
       DERIBIT_HTTP_BEARER_TOKEN: ${DERIBIT_HTTP_BEARER_TOKEN:-}
       RUST_LOG: ${RUST_LOG:-info,deribit_mcp=debug}
+      DERIBIT_CLIENT_ID: ${DERIBIT_CLIENT_ID:-}
+      DERIBIT_CLIENT_SECRET: ${DERIBIT_CLIENT_SECRET:-}
 
     ports:
       # Bind to loopback only; reverse-proxy in front of the host.
