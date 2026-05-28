@@ -72,8 +72,9 @@ pub async fn serve_with_listener(
     cancel: CancellationToken,
 ) -> Result<(), AdapterError> {
     let bearer = config.http_bearer_token.clone();
+    let allowed_hosts = config.allowed_hosts.clone();
 
-    let mcp_service = build_streamable_service(ctx, cancel.clone());
+    let mcp_service = build_streamable_service(ctx, cancel.clone(), allowed_hosts);
 
     // Layer the bearer-token middleware *only* on the `/mcp` service so
     // that unknown paths surface a natural 404 (rather than 401) and
@@ -111,17 +112,15 @@ pub async fn serve_with_listener(
 fn build_streamable_service(
     ctx: Arc<AdapterContext>,
     cancel: CancellationToken,
+    allowed_hosts: Vec<String>,
 ) -> StreamableHttpService<DeribitMcpServer, LocalSessionManager> {
+    // Allowed `Host` header values come from `Config::allowed_hosts`
+    // (CLI `--allowed-hosts` or `DERIBIT_ALLOWED_HOSTS`). Default is
+    // the loopback safe set; operators fronting the adapter under a
+    // public DNS name must list it explicitly to defeat DNS-rebinding.
     let config = StreamableHttpServerConfig::default()
         .with_cancellation_token(cancel)
-        // Loopback-only by default; reverse proxies pre-bind to a
-        // public hostname. Listing localhost / 127.0.0.1 / 0.0.0.0
-        // mirrors the rmcp default safe set.
-        .with_allowed_hosts([
-            "localhost".to_string(),
-            "127.0.0.1".to_string(),
-            "0.0.0.0".to_string(),
-        ]);
+        .with_allowed_hosts(allowed_hosts);
 
     StreamableHttpService::new(
         move || Ok(DeribitMcpServer::new(ctx.clone())),

@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-05-28
+
+### Added
+
+- `--allowed-hosts` CLI flag and `DERIBIT_ALLOWED_HOSTS` env
+  var (comma-separated). Override the loopback-only `Host`
+  header allowlist when fronting the adapter under a public
+  DNS name or reverse proxy. Default remains
+  `localhost,127.0.0.1,0.0.0.0` so loopback deployments keep
+  working unchanged. Without this flag, requests carrying a
+  public hostname in `Host:` are rejected with
+  `403 Forbidden: Host header is not allowed`.
+
+### Changed
+
+- `rust-version` bumped to `1.95` (MSRV).
+
 ### Fixed
 
 - `Docker/Dockerfile` now installs `libssl-dev` in the builder

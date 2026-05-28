@@ -29,6 +29,10 @@ pub struct Config {
     pub http_listen: SocketAddr,
     /// HTTP bearer token for auth (optional, env/`.env` only).
     pub http_bearer_token: Option<String>,
+    /// Hosts accepted in the `Host` request header on `/mcp`.
+    /// Defaults to `localhost`, `127.0.0.1`, `0.0.0.0`. Set this when
+    /// fronting the adapter under a public DNS name or reverse proxy.
+    pub allowed_hosts: Vec<String>,
     /// Log format: `text` or `json`.
     pub log_format: LogFormat,
     /// Upstream transport selection for `Trading` tool dispatch
@@ -182,6 +186,21 @@ impl Config {
             .ok()
             .filter(|v| !v.is_empty());
 
+        // Allowed `Host` header values. Comma-separated on CLI/env,
+        // empty entries discarded. Falls back to the loopback set when
+        // not configured — that mirrors the historical behaviour.
+        let allowed_hosts = args
+            .allowed_hosts
+            .as_ref()
+            .map(|s| parse_allowed_hosts(s))
+            .or_else(|| {
+                std::env::var("DERIBIT_ALLOWED_HOSTS")
+                    .ok()
+                    .map(|s| parse_allowed_hosts(&s))
+            })
+            .filter(|v| !v.is_empty())
+            .unwrap_or_else(default_allowed_hosts);
+
         let order_transport = args
             .order_transport()
             .or_else(|| {
@@ -232,10 +251,33 @@ impl Config {
             transport,
             http_listen,
             http_bearer_token,
+            allowed_hosts,
             log_format,
             order_transport,
         })
     }
+}
+
+/// Loopback-only default allowed-hosts set. Matches the rmcp safe set
+/// and the historical behaviour before `--allowed-hosts` existed.
+#[inline]
+fn default_allowed_hosts() -> Vec<String> {
+    vec![
+        "localhost".to_string(),
+        "127.0.0.1".to_string(),
+        "0.0.0.0".to_string(),
+    ]
+}
+
+/// Parse a comma-separated host list. Empty entries and surrounding
+/// whitespace are stripped so `" a , , b "` yields `["a", "b"]`.
+#[inline]
+fn parse_allowed_hosts(s: &str) -> Vec<String> {
+    s.split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .collect()
 }
 
 /// CLI arguments parsed via `clap`.
@@ -271,6 +313,11 @@ struct Args {
     /// HTTP listen address (only for http transport).
     #[arg(long, help = "HTTP listen address")]
     listen: Option<SocketAddr>,
+
+    /// Comma-separated allowed `Host` header values for `/mcp`.
+    /// Defaults to localhost/127.0.0.1/0.0.0.0 when unset.
+    #[arg(long, help = "Comma-separated allowed Host header values")]
+    allowed_hosts: Option<String>,
 
     /// Log format: text or json.
     #[arg(long, help = "Log format: text or json")]
