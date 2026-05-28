@@ -90,8 +90,8 @@ doc-open:
 .PHONY: publish
 publish: readme
 	cargo login ${CARGO_REGISTRY_TOKEN}
-	cargo package
-	cargo publish
+	cargo package --allow-dirty
+	cargo publish --allow-dirty
 
 .PHONY: coverage
 coverage:
