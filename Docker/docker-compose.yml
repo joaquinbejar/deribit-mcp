@@ -59,7 +59,7 @@ services:
 
     ports:
       # Bind to loopback only; reverse-proxy in front of the host.
-      - "127.0.0.1:8723:8723"
+      - "8723:8723"
 
     # No in-container HEALTHCHECK: the runtime image is distroless
     # (no shell, no `curl` / `wget` / `nc`). Orchestrators probe
