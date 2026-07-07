@@ -2,7 +2,7 @@
 name = "deribit-mcp"
 version = "1.0.1"
 edition = "2024"
-rust-version = "1.95"
+rust-version = "1.86"
 authors = ["Joaquin Bejar <jb@taunais.com>"]
 description = "MCP (Model Context Protocol) server for Deribit trading platform"
 license = "MIT"

@@ -15,7 +15,7 @@
 # ---------- builder ----------
 # Pin to MSRV from `rust-toolchain.toml`. Bumping the toolchain is a
 # deliberate change and lands together with the lockfile / CI bump.
-FROM rust:1.95-slim-bookworm AS builder
+FROM rust:1.96.1-slim-bookworm AS builder
 WORKDIR /src
 
 # Build deps:
