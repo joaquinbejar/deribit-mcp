@@ -431,3 +431,19 @@ Licensed under MIT license
 ## Disclaimer
 
 This software is not officially associated with Deribit. Trading financial instruments carries risk, and this library is provided as-is without any guarantees. Always test thoroughly with a demo account before using in a live trading environment. The MCP server exposes order entry only when explicitly enabled via `--allow-trading`; the operator is responsible for any trades placed through it.
+
+<!-- related-projects:start -->
+## Related projects
+
+Repositories by the same author that this project depends on, and repositories that depend on it.
+
+### Depends on
+
+| Repository | Description |
+|------------|-------------|
+| [deribit-base](https://github.com/joaquinbejar/deribit-base) · [crates.io](https://crates.io/crates/deribit-base) | Common structs, traits and logic shared by the Deribit API clients. |
+| [deribit-fix](https://github.com/joaquinbejar/deribit-fix) · [crates.io](https://crates.io/crates/deribit-fix) | FIX protocol client framework for the Deribit exchange. |
+| [deribit-http](https://github.com/joaquinbejar/deribit-http) · [crates.io](https://crates.io/crates/deribit-http) | HTTP REST API client for the Deribit trading platform. |
+| [deribit-websocket](https://github.com/joaquinbejar/deribit-websocket) · [crates.io](https://crates.io/crates/deribit-websocket) | WebSocket client for Deribit real-time market data and trading. |
+
+<!-- related-projects:end -->
