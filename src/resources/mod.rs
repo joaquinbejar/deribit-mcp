@@ -23,7 +23,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use rmcp::model::{Annotated, RawResource, RawResourceTemplate, Resource, ResourceTemplate};
+use rmcp::model::{Resource, ResourceTemplate};
 
 use crate::context::AdapterContext;
 use crate::error::AdapterError;
@@ -477,20 +477,9 @@ impl ResourceRegistry {
 }
 
 fn make_resource(uri: &'static str, name: &'static str, description: &'static str) -> Resource {
-    let raw = RawResource {
-        uri: uri.to_string(),
-        name: name.to_string(),
-        title: None,
-        description: Some(description.to_string()),
-        mime_type: Some("application/json".to_string()),
-        size: None,
-        icons: None,
-        meta: None,
-    };
-    Annotated {
-        raw,
-        annotations: None,
-    }
+    Resource::new(uri, name)
+        .with_description(description)
+        .with_mime_type("application/json")
 }
 
 fn make_template(
@@ -498,18 +487,9 @@ fn make_template(
     name: &'static str,
     description: &'static str,
 ) -> ResourceTemplate {
-    let raw = RawResourceTemplate {
-        uri_template: template.to_string(),
-        name: name.to_string(),
-        title: None,
-        description: Some(description.to_string()),
-        mime_type: Some("application/json".to_string()),
-        icons: None,
-    };
-    Annotated {
-        raw,
-        annotations: None,
-    }
+    ResourceTemplate::new(template, name)
+        .with_description(description)
+        .with_mime_type("application/json")
 }
 
 #[cfg(test)]
@@ -621,7 +601,7 @@ mod tests {
     fn registry_build_lists_static_currency_entry() {
         let r = ResourceRegistry::build();
         assert_eq!(r.resources().len(), 1);
-        assert_eq!(r.resources()[0].raw.uri, "deribit://currencies");
+        assert_eq!(r.resources()[0].uri, "deribit://currencies");
     }
 
     #[test]
@@ -629,10 +609,7 @@ mod tests {
         let r = ResourceRegistry::build();
         let templates = r.templates();
         assert_eq!(templates.len(), 4);
-        let uris: Vec<&str> = templates
-            .iter()
-            .map(|t| t.raw.uri_template.as_str())
-            .collect();
+        let uris: Vec<&str> = templates.iter().map(|t| t.uri_template.as_str()).collect();
         assert!(uris.contains(&"deribit://instruments/{currency}"));
         assert!(uris.contains(&"deribit://book/{instrument}"));
         assert!(uris.contains(&"deribit://ticker/{instrument}"));

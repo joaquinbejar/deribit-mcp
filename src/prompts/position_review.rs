@@ -11,10 +11,7 @@
 
 use std::sync::Arc;
 
-use rmcp::model::{
-    GetPromptResult, JsonObject, Prompt, PromptArgument, PromptMessage, PromptMessageContent,
-    PromptMessageRole,
-};
+use rmcp::model::{GetPromptResult, JsonObject, Prompt, PromptArgument, PromptMessage, Role};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -126,16 +123,8 @@ async fn render(has_credentials: bool, args: JsonObject) -> Result<GetPromptResu
     );
 
     Ok(GetPromptResult::new(vec![
-        PromptMessage::new(
-            PromptMessageRole::User,
-            PromptMessageContent::Text { text: user_text },
-        ),
-        PromptMessage::new(
-            PromptMessageRole::Assistant,
-            PromptMessageContent::Text {
-                text: assistant_ack,
-            },
-        ),
+        PromptMessage::new_text(Role::User, user_text),
+        PromptMessage::new_text(Role::Assistant, assistant_ack),
     ])
     .with_description(format!("Position review for {currency}")))
 }
@@ -162,16 +151,8 @@ fn missing_credentials_response(currency: &str) -> GetPromptResult {
          Account tool call."
     );
     GetPromptResult::new(vec![
-        PromptMessage::new(
-            PromptMessageRole::User,
-            PromptMessageContent::Text { text: user_text },
-        ),
-        PromptMessage::new(
-            PromptMessageRole::Assistant,
-            PromptMessageContent::Text {
-                text: assistant_ack,
-            },
-        ),
+        PromptMessage::new_text(Role::User, user_text),
+        PromptMessage::new_text(Role::Assistant, assistant_ack),
     ])
     .with_description(format!(
         "Position review for {currency} — credentials missing"
@@ -226,7 +207,7 @@ mod tests {
     async fn render_with_credentials_lists_account_tools() {
         let r = render(true, args(json!({"currency":"BTC"}))).await.unwrap();
         assert_eq!(r.messages.len(), 2);
-        let PromptMessageContent::Text { ref text } = r.messages[0].content else {
+        let Some(text) = r.messages[0].content.as_text().map(|t| &t.text) else {
             panic!("text expected");
         };
         for tool in [
@@ -245,7 +226,7 @@ mod tests {
         let r = render(true, args(json!({"currency":"ETH","include_history":true})))
             .await
             .unwrap();
-        let PromptMessageContent::Text { ref text } = r.messages[0].content else {
+        let Some(text) = r.messages[0].content.as_text().map(|t| &t.text) else {
             panic!("text expected");
         };
         assert!(text.contains("get_user_trades_by_currency"));
@@ -257,7 +238,7 @@ mod tests {
         let r = render(false, args(json!({"currency":"BTC"})))
             .await
             .unwrap();
-        let PromptMessageContent::Text { ref text } = r.messages[0].content else {
+        let Some(text) = r.messages[0].content.as_text().map(|t| &t.text) else {
             panic!("text expected");
         };
         assert!(text.starts_with("WARNING:"));

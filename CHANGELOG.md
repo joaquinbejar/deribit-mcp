@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Dependencies updated to latest stable versions (rmcp 1.6 -> 3.4, tokio-tungstenite 0.29 -> 0.30); server handlers migrated to the rmcp 3.x model API (`ServerConfig`, `ContentBlock`, `Role`, MRTR response enums).
+
 ## [1.0.1] - 2026-05-28
 
 ### Added
