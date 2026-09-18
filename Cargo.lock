@@ -610,7 +610,7 @@ dependencies = [
 
 [[package]]
 name = "deribit-mcp"
-version = "1.0.1"
+version = "1.0.2"
 dependencies = [
  "anyhow",
  "async-stream",
