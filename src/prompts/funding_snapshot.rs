@@ -8,10 +8,7 @@
 
 use std::sync::Arc;
 
-use rmcp::model::{
-    GetPromptResult, JsonObject, Prompt, PromptArgument, PromptMessage, PromptMessageContent,
-    PromptMessageRole,
-};
+use rmcp::model::{GetPromptResult, JsonObject, Prompt, PromptArgument, PromptMessage, Role};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -109,16 +106,8 @@ async fn render(args: JsonObject) -> Result<GetPromptResult, AdapterError> {
     );
 
     let messages = vec![
-        PromptMessage::new(
-            PromptMessageRole::User,
-            PromptMessageContent::Text { text: user_text },
-        ),
-        PromptMessage::new(
-            PromptMessageRole::Assistant,
-            PromptMessageContent::Text {
-                text: assistant_ack,
-            },
-        ),
+        PromptMessage::new_text(Role::User, user_text),
+        PromptMessage::new_text(Role::Assistant, assistant_ack),
     ];
     Ok(GetPromptResult::new(messages).with_description(format!(
         "Funding snapshot for {normalized} (lookback: {lookback} hour(s))"
@@ -175,7 +164,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(r.messages.len(), 2);
-        let PromptMessageContent::Text { ref text } = r.messages[0].content else {
+        let Some(text) = r.messages[0].content.as_text().map(|t| &t.text) else {
             panic!("text expected");
         };
         assert!(text.contains("BTC-PERPETUAL"));

@@ -12,10 +12,7 @@
 
 use std::sync::Arc;
 
-use rmcp::model::{
-    GetPromptResult, JsonObject, Prompt, PromptArgument, PromptMessage, PromptMessageContent,
-    PromptMessageRole,
-};
+use rmcp::model::{GetPromptResult, JsonObject, Prompt, PromptArgument, PromptMessage, Role};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -113,16 +110,8 @@ async fn render(args: JsonObject) -> Result<GetPromptResult, AdapterError> {
     );
 
     let messages = vec![
-        PromptMessage::new(
-            PromptMessageRole::User,
-            PromptMessageContent::Text { text: user_message },
-        ),
-        PromptMessage::new(
-            PromptMessageRole::Assistant,
-            PromptMessageContent::Text {
-                text: assistant_ack,
-            },
-        ),
+        PromptMessage::new_text(Role::User, user_message),
+        PromptMessage::new_text(Role::Assistant, assistant_ack),
     ];
     Ok(GetPromptResult::new(messages).with_description(format!(
         "Daily options summary for {normalized} (horizon: {horizon} day(s))"
@@ -178,12 +167,9 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(result.messages.len(), 2);
-        assert!(matches!(result.messages[0].role, PromptMessageRole::User));
-        assert!(matches!(
-            result.messages[1].role,
-            PromptMessageRole::Assistant
-        ));
-        let PromptMessageContent::Text { ref text } = result.messages[0].content else {
+        assert!(matches!(result.messages[0].role, Role::User));
+        assert!(matches!(result.messages[1].role, Role::Assistant));
+        let Some(text) = result.messages[0].content.as_text().map(|t| &t.text) else {
             panic!("expected text content");
         };
         assert!(text.contains("BTC options"));
@@ -195,7 +181,7 @@ mod tests {
         let result = render(args_obj(json!({"currency":"eth","horizon_days":1})))
             .await
             .unwrap();
-        let PromptMessageContent::Text { ref text } = result.messages[0].content else {
+        let Some(text) = result.messages[0].content.as_text().map(|t| &t.text) else {
             panic!("expected text content");
         };
         assert!(text.contains("ETH options"));

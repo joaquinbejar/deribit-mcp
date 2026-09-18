@@ -25,11 +25,11 @@ use std::future::Future;
 use std::sync::Arc;
 
 use rmcp::model::{
-    AnnotateAble, CallToolRequestParams, CallToolResult, Content, GetPromptRequestParams,
-    GetPromptResult, Implementation, InitializeResult, ListPromptsResult,
+    CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, GetPromptRequestParams,
+    GetPromptResponse, Implementation, InitializeResult, JsonObject, ListPromptsResult,
     ListResourceTemplatesResult, ListResourcesResult, ListToolsResult, PaginatedRequestParams,
-    ProtocolVersion, RawContent, ReadResourceRequestParams, ReadResourceResult, ResourceContents,
-    ServerInfo,
+    ProtocolVersion, ReadResourceRequestParams, ReadResourceResponse, ReadResourceResult,
+    ResourceContents, ServerConfig,
 };
 use rmcp::service::RequestContext;
 use rmcp::{ErrorData as McpError, RoleServer, ServerHandler};
@@ -41,7 +41,7 @@ use crate::resources::{ResourceContent, ResourceRegistry, parse_resource_uri};
 use crate::tools::ToolRegistry;
 
 /// MCP protocol revision pinned by `deribit-mcp`. The crate is built
-/// against the `2025-06-18` revision; `rmcp` 1.6 supports several
+/// against the `2025-06-18` revision; `rmcp` 3.x supports several
 /// revisions and would otherwise default to its newest.
 pub const MCP_PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion::V_2025_06_18;
 
@@ -83,17 +83,21 @@ impl DeribitMcpServer {
         }
     }
 
-    /// Build the [`ServerInfo`] returned from `initialize` and used by
-    /// `rmcp` to drive the handshake.
+    /// Build the [`ServerConfig`] returned from `initialize` and used
+    /// by `rmcp` to drive the handshake.
     #[must_use]
-    pub fn server_info() -> ServerInfo {
-        let capabilities = rmcp::model::ServerCapabilities::builder()
-            .enable_logging()
+    pub fn server_info() -> ServerConfig {
+        let mut capabilities = rmcp::model::ServerCapabilities::builder()
             .enable_tools()
             .enable_resources()
             .enable_resources_subscribe()
             .enable_prompts()
             .build();
+        // `doc/MCP-SPEC.md` §5 still advertises `logging`. The builder's
+        // `enable_logging()` is deprecated upstream (SEP-2577) but the
+        // capability field itself is not, so set it directly to keep
+        // the advertised envelope unchanged.
+        capabilities.logging = Some(JsonObject::default());
 
         InitializeResult::new(capabilities)
             .with_protocol_version(MCP_PROTOCOL_VERSION)
@@ -105,7 +109,7 @@ impl DeribitMcpServer {
 }
 
 impl ServerHandler for DeribitMcpServer {
-    fn get_info(&self) -> ServerInfo {
+    fn get_info(&self) -> ServerConfig {
         Self::server_info()
     }
 
@@ -115,13 +119,7 @@ impl ServerHandler for DeribitMcpServer {
         _context: RequestContext<RoleServer>,
     ) -> impl Future<Output = Result<ListToolsResult, McpError>> + Send + '_ {
         let tools = self.tools.list();
-        async move {
-            Ok(ListToolsResult {
-                tools,
-                next_cursor: None,
-                meta: None,
-            })
-        }
+        async move { Ok(ListToolsResult::with_all_items(tools)) }
     }
 
     fn list_resources(
@@ -130,13 +128,7 @@ impl ServerHandler for DeribitMcpServer {
         _context: RequestContext<RoleServer>,
     ) -> impl Future<Output = Result<ListResourcesResult, McpError>> + Send + '_ {
         let resources = self.resources.resources();
-        async move {
-            Ok(ListResourcesResult {
-                resources,
-                next_cursor: None,
-                meta: None,
-            })
-        }
+        async move { Ok(ListResourcesResult::with_all_items(resources)) }
     }
 
     fn list_resource_templates(
@@ -146,11 +138,9 @@ impl ServerHandler for DeribitMcpServer {
     ) -> impl Future<Output = Result<ListResourceTemplatesResult, McpError>> + Send + '_ {
         let resource_templates = self.resources.templates();
         async move {
-            Ok(ListResourceTemplatesResult {
+            Ok(ListResourceTemplatesResult::with_all_items(
                 resource_templates,
-                next_cursor: None,
-                meta: None,
-            })
+            ))
         }
     }
 
@@ -160,20 +150,14 @@ impl ServerHandler for DeribitMcpServer {
         _context: RequestContext<RoleServer>,
     ) -> impl Future<Output = Result<ListPromptsResult, McpError>> + Send + '_ {
         let prompts = self.prompts.list();
-        async move {
-            Ok(ListPromptsResult {
-                prompts,
-                next_cursor: None,
-                meta: None,
-            })
-        }
+        async move { Ok(ListPromptsResult::with_all_items(prompts)) }
     }
 
     fn get_prompt(
         &self,
         request: GetPromptRequestParams,
         _context: RequestContext<RoleServer>,
-    ) -> impl Future<Output = Result<GetPromptResult, McpError>> + Send + '_ {
+    ) -> impl Future<Output = Result<GetPromptResponse, McpError>> + Send + '_ {
         let ctx = self.ctx.clone();
         let prompts = self.prompts.clone();
         async move {
@@ -186,7 +170,7 @@ impl ServerHandler for DeribitMcpServer {
                         prompt = %request.name,
                         "prompts/get ok"
                     );
-                    Ok(result)
+                    Ok(GetPromptResponse::Complete(result))
                 }
                 Err(err) => {
                     tracing::warn!(
@@ -205,7 +189,7 @@ impl ServerHandler for DeribitMcpServer {
         &self,
         request: CallToolRequestParams,
         _context: RequestContext<RoleServer>,
-    ) -> impl Future<Output = Result<CallToolResult, McpError>> + Send + '_ {
+    ) -> impl Future<Output = Result<CallToolResponse, McpError>> + Send + '_ {
         let ctx = self.ctx.clone();
         let tools = self.tools.clone();
         async move {
@@ -223,7 +207,9 @@ impl ServerHandler for DeribitMcpServer {
                         elapsed_ms,
                         "tools/call ok"
                     );
-                    Ok(call_tool_result_from_value(&value))
+                    Ok(CallToolResponse::Complete(call_tool_result_from_value(
+                        &value,
+                    )))
                 }
                 Err(err) => {
                     tracing::warn!(
@@ -233,7 +219,9 @@ impl ServerHandler for DeribitMcpServer {
                         error = %err,
                         "tools/call error"
                     );
-                    Ok(call_tool_result_from_error(&err))
+                    Ok(CallToolResponse::Complete(call_tool_result_from_error(
+                        &err,
+                    )))
                 }
             }
         }
@@ -243,7 +231,7 @@ impl ServerHandler for DeribitMcpServer {
         &self,
         request: ReadResourceRequestParams,
         _context: RequestContext<RoleServer>,
-    ) -> impl Future<Output = Result<ReadResourceResult, McpError>> + Send + '_ {
+    ) -> impl Future<Output = Result<ReadResourceResponse, McpError>> + Send + '_ {
         let ctx = self.ctx.clone();
         let resources = self.resources.clone();
         async move {
@@ -270,7 +258,9 @@ impl ServerHandler for DeribitMcpServer {
                         elapsed_ms,
                         "resources/read ok"
                     );
-                    Ok(read_resource_result_from_content(&request.uri, content))
+                    Ok(ReadResourceResponse::Complete(
+                        read_resource_result_from_content(&request.uri, content),
+                    ))
                 }
                 Err(err) => {
                     let elapsed_ms = started.elapsed().as_millis() as u64;
@@ -311,8 +301,9 @@ fn call_tool_result_from_value(value: &serde_json::Value) -> CallToolResult {
     // original payload (un-wrapped) so clients that read
     // `content[0].text` still get the raw value, not the
     // `{"value": …}` wrapper.
-    let raw = RawContent::text(serde_json::to_string(value).unwrap_or_else(|_| value.to_string()));
-    result.content = vec![Content::from(raw.no_annotation())];
+    result.content = vec![ContentBlock::text(
+        serde_json::to_string(value).unwrap_or_else(|_| value.to_string()),
+    )];
     result
 }
 
@@ -400,7 +391,7 @@ mod tests {
         assert!(sc.is_object(), "structured_content must be an object: {sc}");
         assert_eq!(sc["value"], scalar, "scalar preserved under `value` key");
         // The original payload is still recoverable from content[0].
-        let rmcp::model::RawContent::Text(ref text) = result.content[0].raw else {
+        let Some(text) = result.content[0].as_text() else {
             panic!("expected text content");
         };
         assert_eq!(text.text, "1778230818914");

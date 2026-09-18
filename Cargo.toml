@@ -30,7 +30,7 @@ path = "src/main.rs"
 
 [dependencies]
 # MCP SDK — pinned to a specific minor.
-rmcp = { version = "1.6", default-features = false, features = [
+rmcp = { version = "3.4", default-features = false, features = [
     "server",
     "macros",
     "schemars",
@@ -124,7 +124,7 @@ async-stream = "0.3"
 # integration tests. Pinned to the same major as the version
 # `deribit-websocket` already pulls in so the test binary doesn't add
 # a second copy.
-tokio-tungstenite = "0.29"
+tokio-tungstenite = "0.30"
 # Snapshot review for tool input-schemas and `AdapterError` wire shape.
 # Snapshots are committed under `tests/snapshots/` and reviewed
 # deliberately on every PR.
