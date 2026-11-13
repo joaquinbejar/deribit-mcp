@@ -50,9 +50,9 @@ Repositories by the same author that this project depends on, and repositories t
 
 | Repository | Description |
 |------------|-------------|
-| [deribit-base](https://github.com/joaquinbejar/deribit-base) · [crates.io](https://crates.io/crates/deribit-base) | Common structs, traits and logic shared by the Deribit API clients. |
-| [deribit-fix](https://github.com/joaquinbejar/deribit-fix) · [crates.io](https://crates.io/crates/deribit-fix) | FIX protocol client framework for the Deribit exchange. |
-| [deribit-http](https://github.com/joaquinbejar/deribit-http) · [crates.io](https://crates.io/crates/deribit-http) | HTTP REST API client for the Deribit trading platform. |
-| [deribit-websocket](https://github.com/joaquinbejar/deribit-websocket) · [crates.io](https://crates.io/crates/deribit-websocket) | WebSocket client for Deribit real-time market data and trading. |
+| [deribit-base](https://github.com/joaquinbejar/deribit-base) | Shared Deribit types, traits and errors that the MCP tool, resource and prompt surface is built on. |
+| [deribit-fix](https://github.com/joaquinbejar/deribit-fix) | Optional FIX transport, enabled with the `fix` feature, for order entry over the Deribit FIX gateway. |
+| [deribit-http](https://github.com/joaquinbejar/deribit-http) | REST client behind the MCP tools that query market data, accounts and orders. |
+| [deribit-websocket](https://github.com/joaquinbejar/deribit-websocket) | WebSocket client that feeds the MCP resources and subscriptions with real-time market data. |
 
 <!-- related-projects:end -->
